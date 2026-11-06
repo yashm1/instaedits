@@ -1,53 +1,91 @@
+<div align="center">
+
+<img src="docs/assets/social-preview.png" alt="Instaedits — script and video in, edited Instagram Reel out" width="720">
+
 # Instaedits
 
-Script + video in → edited Reel out. Local dashboard that runs the whole workflow and shows every step.
+**AI video editing pipeline for Instagram Reels, TikTok and Shorts.**
+Give it your script and your talking-head video — get back an edited short-form video with animated infographics, styled captions, background music and sound effects.
+
+[![tests](https://github.com/yashm1/instaedits/actions/workflows/test.yml/badge.svg)](https://github.com/yashm1/instaedits/actions/workflows/test.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+![node ≥22.18](https://img.shields.io/badge/node-%E2%89%A522.18-brightgreen)
+![status: beta](https://img.shields.io/badge/status-beta-orange)
+
+</div>
+
+Built for creators who explain technical topics (system design, HLD/LLD, AI) and want **high-retention edits without AI slop**: every card carries new information, the hook works with the sound off, and the numeric rules are enforced in code — not just requested in a prompt.
+
+![Infographic cards rendered by Instaedits: architecture flow, syntax-highlighted code, steps, chart, hook](docs/assets/cards.png)
+
+## What you get
+- **Creative direction by Claude Opus** — which infographic appears on which spoken phrase, punch-in zooms, caption style and keyword highlights, music choice and levels, SFX cues, light colour grade.
+- **Remotion infographics** — Hook, architecture Flow (animated data packets), Fanout, Steps, Chart, syntax-highlighted Code, count-up Stat, Compare, Bullets. One hero accent on dark, Instagram safe zones built in.
+- **Dead-air removal** (pauses > 0.4 s) and **exact timing**: your script is what you speak, so each card is placed on the real word, not an estimate.
+- **Assembly in the [Edits](#prerequisites) desktop app** via MCP: overlays + transitions, captions, music with ducking, SFX, grade, export 9:16 1080×1920.
+- **Token-lean by design**: only 3 of 9 steps use an LLM, each with a hard USD cap; everything else is local code. Cached artifacts mean re-runs don't re-pay.
+- **Local dashboard** showing every step, model, tokens and cost live.
+
+## How it works
+```mermaid
+flowchart LR
+  A[script + video] --> B[transcript<br/>Edits app]
+  B --> C[cut dead air<br/>ffmpeg]
+  C --> D[creative direction<br/>Claude Opus]
+  D --> E[guardrails + resolve<br/>→ exact EDL]
+  E --> F[Remotion cards<br/>Claude Sonnet → render]
+  F --> G[execute EDL in Edits<br/>Sonnet / Haiku]
+  E --> G
+  G --> H[final.mp4]
+```
+Principle: **decide once, execute mechanically.** One strong model decides everything creative; the rest follows an exact list. Details in [docs/architecture.md](docs/architecture.md), research behind the editing rules in [docs/research.md](docs/research.md).
 
 ## Prerequisites
-**macOS + the [Edits](https://www.edits.app) desktop app** (the only supported editor; it must be open with Automation enabled), [Claude Code](https://claude.com/claude-code) CLI logged in, `ffmpeg`/`ffprobe` on PATH, Node ≥ 22.18.
+- **macOS** and the **Edits desktop app** (open, with Automation enabled in Settings). It is the only supported editor and an *unofficial* integration.
+- **[Claude Code](https://claude.com/claude-code) CLI**, logged in (LLM steps run through it and bill your plan).
+- `ffmpeg` / `ffprobe` on your PATH, **Node ≥ 22.18**.
 
+## Quick start
+```bash
+git clone https://github.com/yashm1/instaedits && cd instaedits
+npm run setup                      # installs Remotion deps
+cp .env.example .env.local         # paste your Edits token (Settings → Automation → Access token)
+npm start                          # → http://127.0.0.1:4399
 ```
-npm run setup      # installs Remotion deps (once)
-cp .env.example .env.local   # then paste your Edits token
-npm start          # http://127.0.0.1:4399
-```
-Jobs run **one at a time** (one Edits app, one Remotion workspace); extra jobs show as `queued`.
+Paste your script, enter the absolute path to your video, pick **Fast** (Haiku) or **High** (Sonnet + frame QA), and run. Tick *Dry run* to stop before the Edits app (plan + render only, ≈ $0.15). Jobs run one at a time; use *Re-run from here* to resume any step.
 
 ## Configuration
-Everything environment-specific is in [`server/config.mjs`](server/config.mjs): models **by role** (director / coder / editor high / editor fast), per-step USD caps, ports, canvas, jobs dir. Override with env vars (see `.env.example`).
+All environment-specific values live in [`server/config.mjs`](server/config.mjs) and can be overridden by env vars ([`.env.example`](.env.example)): models **by role**, per-step USD caps, port, jobs directory, canvas.
 
-## Security model
-The server binds to 127.0.0.1 only and rejects requests with a foreign `Host` (DNS rebinding) or `Origin` (cross-site POST), requires `application/json`, caps body size, whitelists request fields, validates job ids (no path traversal) and clamps budgets. The Edits token is passed to `claude` through a 0600 temp file, never on the command line.
+## Status & limitations
+**Beta.** Planning, rule enforcement, timing resolution and rendering are tested (`npm test`, 80+ tests). The final step — an LLM driving the Edits app (captions placement, music/SFX search, export) — depends on a closed-source app's tool surface and may need prompt tuning on your machine. Other known limits:
+- Edits app only, macOS only. Overlays are opaque full-frame cards (no alpha).
+- A repeated anchor phrase resolves to its first occurrence.
+- Editing rules are heuristics distilled from low-evidence sources — measure your own retention.
 
-## One-time setup: Edits access token
-Edits → Settings → Automation → copy the **Access token**, then:
-```
-echo 'METAPILOT_TOKEN=<paste>' > .env.local   # gitignored
-```
+## Security
+Local, single-user tool: binds to `127.0.0.1`, rejects foreign `Host`/`Origin`, JSON-only POST, validated ids and paths, capped budgets, token passed via a private temp file. See [SECURITY.md](SECURITY.md).
 
-## Pipeline (Opus decides everything creative; everyone else executes)
-| # | Step | Who | Notes |
-|---|------|-----|-------|
-| 1 | Probe | ffprobe | |
-| 2 | Word-level transcript | Edits app captions model, called directly from Node | 0 LLM tokens |
-| 3 | Cut dead air | ffmpeg | gaps >0.5s removed → `tight.mp4` (so the Edits agent never has to cut) |
-| 4 | **Creative direction** | **Opus 5.5** | cards + anchors, punch-ins, caption style/colour/keywords, music query + levels + ducking, SFX cues, grade. Constrained to options verified in the Edits app |
-| 5 | Resolve → EDL | local | anchors → exact timestamps on the tight timeline; zooms snapped to card-free gaps; SFX spaced |
-| 6 | Write `Scenes.tsx` | Sonnet 5.5 | verbatim props → library components |
-| 7 | Render infographics | Remotion | Hook, Flow (data packets), Fanout, Steps, Chart, Code (syntax-highlighted), Stat (count-up), Bullets, Compare |
-| 8 | **Execute the EDL** in Edits | Sonnet 5.5 (High) / Haiku 5.5 (Fast) | import, overlay cards + transitions, punch-ins, captions (style + keyword highlights), music + ducking, SFX, grade, export. High adds a frame-QA pass |
-| 9 | Verify | ffprobe | |
+## FAQ
+**Does my video get uploaded?** Your video file is processed locally (ffmpeg, Remotion, the Edits app). Claude receives text only: your script, sentence timings, the storyboard, and — in High mode — a few preview frames during the quality check.
 
-## Token discipline
-- Every `claude -p` call is minimal: no skills, no user settings, only the tools / MCP it needs (`--strict-mcp-config`, `--tools`).
-- Hard USD cap per LLM step (`--max-budget-usd`, editable for the Edit step in the UI).
-- Component library means Sonnet doesn't author animations from scratch.
-- Artifacts are cached per job (`storyboard.json`, `Scenes.tsx`, rendered clips): "Re-run from here" never re-pays for earlier steps.
-- Dry-run mode stops before the Edits app (typical plan+codegen ≈ $0.09).
-- Per-step tokens and cost are shown live in the dashboard.
+**What does the Edits app do with my audio?** Transcription and the music/SFX libraries are provided by the Edits app itself; whether any of that happens in its cloud is governed by *its* privacy policy, not this project. Check it if your footage is sensitive.
 
-## Layout
-`server/` pipeline + SSE API · `public/index.html` dashboard · `remotion/` component library + renderer · `jobs/` per-run artifacts (gitignored)
+**How much does a run cost?** The LLM steps are capped (defaults: direction $1, codegen $0.50, edit $1.50 fast / $3 high). Typical direction + codegen is around $0.15 for a 25-second reel.
 
-## Tests & workflow
-`npm test` (Node built-in runner, no deps): transcript math, anchor matching, EDL resolver, guardrails, theme contrast/safe zones, prompt↔catalog consistency, CLI flags, MCP client (mock server), pipeline wiring, Remotion typecheck.
-Nothing is committed to `main` directly: every change is a PR with a self-review and tests. Research behind the creative rules: [docs/research.md](docs/research.md).
+**Can I use other editors (CapCut, Premiere, DaVinci)?** Not currently — Edits only.
+
+**Can I swap models?** Yes, per role via `config.mjs` or `INSTAEDITS_MODEL_*` env vars.
+
+**Is it for TikTok / YouTube Shorts too?** The canvas is 9:16, so yes; the safe zones are tuned for Instagram.
+
+## Third-party licences — please read
+This repo is MIT, but it **depends on [Remotion](https://www.remotion.dev), which has its own license**: free for individuals, non-profits and for-profit organisations with up to 3 employees; larger companies need a Company License. See [THIRD_PARTY.md](THIRD_PARTY.md).
+
+## Contributing
+PRs welcome — read [CONTRIBUTING.md](CONTRIBUTING.md) (PR + tests + self-review, no direct commits to `main`). Please follow the [Code of Conduct](CODE_OF_CONDUCT.md).
+
+## License
+[MIT](LICENSE) © 2026 Yash Mantri
+
+<sub>Keywords: AI video editor, Instagram Reels automation, short-form video, Remotion, Claude, Claude Code, MCP, content creation, infographics, auto captions, video retention, faceless explainer, system design videos.</sub>
