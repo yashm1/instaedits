@@ -5,21 +5,26 @@ import { EventEmitter } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { runClaude, MODELS, writeJson } from './claude.mjs';
 import * as P from './prompts.mjs';
+import { EDITS_URL, editsAuthHeaders } from './edits-mcp.mjs';
+import { transcribe, planCuts, tighten, sentences, buildEdl, probe as probeVideo } from './media.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const REMOTION = path.join(ROOT, 'remotion');
 const JOBS = path.join(ROOT, 'jobs');
-const METAPILOT_MCP = JSON.stringify({ mcpServers: { 'metapilot-native': { type: 'http', url: process.env.METAPILOT_URL || 'http://127.0.0.1:19501/mcp' } } });
+const metapilotMcp = () => JSON.stringify({ mcpServers: { 'metapilot-native': { type: 'http', url: EDITS_URL, headers: editsAuthHeaders() } } });
 
 export const bus = new EventEmitter();
 const jobs = new Map();
 
 const STEP_DEFS = (q) => [
   { key: 'probe', title: 'Probe video', model: 'local (ffprobe)' },
-  { key: 'plan', title: 'Plan storyboard + Remotion brief', model: MODELS.opus },
-  { key: 'codegen', title: 'Generate Remotion scenes', model: MODELS.sonnet },
-  { key: 'render', title: 'Render scenes (Remotion)', model: 'local (Remotion)' },
-  { key: 'edit', title: 'Edit in Edits app (cuts, overlays, captions, music, export)', model: q === 'high' ? MODELS.sonnet : MODELS.haiku },
+  { key: 'transcribe', title: 'Word-level transcript', model: 'local (Edits captions model)' },
+  { key: 'tighten', title: 'Cut dead air → tight.mp4', model: 'local (ffmpeg)' },
+  { key: 'direction', title: 'Creative direction: cards, zooms, captions, music, SFX', model: MODELS.opus },
+  { key: 'resolve', title: 'Resolve anchors → exact timestamps (EDL)', model: 'local' },
+  { key: 'codegen', title: 'Generate Remotion infographics', model: MODELS.sonnet },
+  { key: 'render', title: 'Render infographics (Remotion)', model: 'local (Remotion)' },
+  { key: 'edit', title: 'Execute EDL in Edits app', model: q === 'high' ? MODELS.sonnet : MODELS.haiku },
   { key: 'verify', title: 'Verify export', model: 'local (ffprobe)' },
 ];
 
@@ -42,7 +47,7 @@ export function createJob({ script, video, quality = 'high', budgets = {}, jobId
   fs.writeFileSync(path.join(dir, 'script.txt'), script);
   const state = {
     id, createdAt: Date.now(), status: 'queued', quality, dryRun: !!dryRun, video, script,
-    budgets: { plan: 0.6, codegen: 0.5, edit: quality === 'high' ? 2.5 : 1.2, ...budgets },
+    budgets: { direction: 1.0, codegen: 0.5, edit: quality === 'high' ? 3 : 1.5, ...budgets },
     steps: STEP_DEFS(quality).map((s) => ({ ...s, status: 'pending', log: [], cost: 0, tokens: { in: 0, out: 0 } })),
   };
   const job = { id, dir, state, abort: new AbortController() };
@@ -78,7 +83,6 @@ export async function runJob(job, { from = 'probe' } = {}) {
 }
 
 const f = (job, ...p) => path.join(job.dir, ...p);
-const probeVideo = (file) => JSON.parse(execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration:stream=width,height,codec_type', '-of', 'json', file], { encoding: 'utf8' }));
 
 const STEPS = {
   async probe(job, step, log) {
@@ -89,18 +93,48 @@ const STEPS = {
     log(`${job.state.resolution}, ${job.state.duration.toFixed(1)}s, audio=${info.streams.some((x) => x.codec_type === 'audio')}`);
   },
 
-  async plan(job, step, log) {
-    if (fs.existsSync(f(job, 'storyboard.json'))) { log('♻️ storyboard.json exists — reusing (no tokens spent)'); return; }
-    const library = fs.readFileSync(path.join(REMOTION, 'LIBRARY.md'), 'utf8').split('\n').filter((l) => l.startsWith('- `')).join('\n');
+  async transcribe(job, step, log) {
+    await transcribe(job.state.video, job.dir, job.state.script, log, job.abort.signal);
+  },
+
+  async tighten(job, step, log) {
+    const { words } = JSON.parse(fs.readFileSync(f(job, 'transcript.json'), 'utf8'));
+    const cuts = planCuts(words, job.state.duration);
+    writeJson(f(job, 'cuts.json'), cuts.segs);
+    job.state.tight = { duration: +cuts.total.toFixed(2), saved: +cuts.saved.toFixed(2) };
+    if (fs.existsSync(f(job, 'tight.mp4'))) { log('♻️ tight.mp4 cached'); return; }
+    await tighten(job.state.video, cuts.segs, f(job, 'tight.mp4'), log, job.abort.signal);
+    log(`${job.state.duration.toFixed(1)}s → ${cuts.total.toFixed(1)}s (−${cuts.saved.toFixed(1)}s dead air)`);
+  },
+
+  async direction(job, step, log) {
+    if (fs.existsSync(f(job, 'direction.json'))) { log('♻️ direction.json exists — reusing (no tokens spent)'); return; }
+    const { words } = JSON.parse(fs.readFileSync(f(job, 'transcript.json'), 'utf8'));
+    const cuts = planCuts(words, job.state.duration);
+    const library = fs.readFileSync(path.join(REMOTION, 'LIBRARY.md'), 'utf8').split('\n').filter((l) => l.startsWith('- `') || l.startsWith('Icons')).join('\n');
     const r = await runClaude({
-      model: MODELS.opus, system: P.PLAN_SYSTEM, schema: P.PLAN_SCHEMA, effort: 'low',
-      prompt: P.planPrompt({ script: job.state.script, duration: job.state.duration, library }),
-      cwd: job.dir, budget: job.state.budgets.plan, onEvent: log, signal: job.abort.signal,
+      model: MODELS.opus, system: P.DIRECTOR_SYSTEM, schema: P.DIRECTOR_SCHEMA, effort: 'medium',
+      prompt: P.directorPrompt({ script: job.state.script, sentences: sentences(words, cuts.toOut), duration: cuts.total, library }),
+      cwd: job.dir, budget: job.state.budgets.direction, onEvent: log, signal: job.abort.signal,
     });
-    const plan = r.structured ?? JSON.parse(r.text.match(/\{[\s\S]*\}/)[0]);
-    writeJson(f(job, 'storyboard.json'), plan);
-    log(`${plan.scenes.length} scenes planned`);
+    const d = r.structured ?? JSON.parse(r.text.match(/\{[\s\S]*\}/)[0]);
+    writeJson(f(job, 'direction.json'), d);
+    job.state.direction = { concept: d.concept, cards: d.scenes.length, zooms: d.zooms.length, sfx: d.sfx.length, captions: `${d.captions.style} · ${d.captions.highlightColor}`, music: `${d.music.query} @ ${d.music.volume} (ducked ${d.music.duckedVolume})` };
+    log(`🎬 ${d.concept}`);
     return r;
+  },
+
+  async resolve(job, step, log) {
+    const { words } = JSON.parse(fs.readFileSync(f(job, 'transcript.json'), 'utf8'));
+    const cuts = planCuts(words, job.state.duration);
+    const d = JSON.parse(fs.readFileSync(f(job, 'direction.json'), 'utf8'));
+    const edl = buildEdl(d, words, cuts, log);
+    writeJson(f(job, 'edl.json'), edl);
+    writeJson(f(job, 'scenes.json'), { remotion_brief: d.remotion_brief, scenes: edl.scenes.map(({ id, kind, dur, props }) => ({ id, kind, dur, props })) });
+    for (const x of fs.readdirSync(f(job, 'clips'))) fs.unlinkSync(f(job, 'clips', x)); // stale clips from older plans
+    if (fs.existsSync(f(job, 'Scenes.tsx'))) fs.unlinkSync(f(job, 'Scenes.tsx'));
+    log(`${edl.scenes.length} cards · ${edl.zooms.length} zooms · ${edl.sfx.length} sfx`);
+    job.state.edl = { cards: edl.scenes.map((s) => `${s.start}s ${s.kind} (${s.dur}s)`), zooms: edl.zooms.length, sfx: edl.sfx.length };
   },
 
   async codegen(job, step, log) {
@@ -143,14 +177,14 @@ const STEPS = {
   },
 
   async edit(job, step, log) {
-    const plan = JSON.parse(fs.readFileSync(f(job, 'storyboard.json'), 'utf8'));
+    const edl = JSON.parse(fs.readFileSync(f(job, 'edl.json'), 'utf8'));
     const out = f(job, 'final.mp4');
     const r = await runClaude({
-      model: step.model, prompt: P.editPrompt({ video: job.state.video, clipsDir: f(job, 'clips'), storyboard: plan.scenes, out, quality: job.state.quality }),
-      mcpConfig: METAPILOT_MCP, allowed: 'mcp__metapilot-native', tools: '', cwd: job.dir,
+      model: step.model, system: P.editSystem, prompt: P.editPrompt({ tight: f(job, 'tight.mp4'), clipsDir: f(job, 'clips'), edl, out, quality: job.state.quality }),
+      mcpConfig: metapilotMcp(), allowed: 'mcp__metapilot-native', tools: '', cwd: job.dir,
       budget: job.state.budgets.edit, onEvent: log, signal: job.abort.signal,
     });
-    log(`↩ ${r.text.slice(0, 200)}`);
+    log(`↩ ${r.text.slice(0, 300)}`);
     return r;
   },
 

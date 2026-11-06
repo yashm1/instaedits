@@ -34,13 +34,14 @@ pre{margin:0;padding:10px 12px;background:var(--bg);border-top:1px solid var(--l
   <div class="hint">Absolute path. Tip: drag the file into Terminal to copy its path.</div>
   <label>Edit quality</label>
   <select id="quality"><option value="high">High — Sonnet 5.5 + frame QA pass</option><option value="fast">Fast — Haiku 5.5, no QA pass</option></select>
-  <label>Edit step budget (USD cap)</label><input id="budget" type="number" step="0.1" placeholder="auto (2.5 high / 1.2 fast)">
+  <label>Edit step budget (USD cap)</label><input id="budget" type="number" step="0.1" placeholder="auto (3.0 high / 1.5 fast)">
   <label style="font-weight:400"><input type="checkbox" id="dry" style="width:auto"> Dry run (plan + Remotion render only, skip Edits app)</label>
   <div class="row" style="margin-top:16px"><button id="run">Run workflow</button><span id="msg" class="err"></span></div>
   <label>Recent jobs</label><div id="jobs"></div>
 </section>
 <section>
   <div class="bar"><div><b id="jid">No job yet</b> <span class="m" id="jstat"></span></div><div class="total" id="total"></div></div>
+  <div id="dir"></div>
   <div id="steps"></div>
 </section></main>
 <script>
@@ -50,6 +51,9 @@ const dur=s=>s.startedAt?((s.endedAt||Date.now())-s.startedAt)/1000|0:0;
 function render(j){
   cur=j.id;$('jid').textContent=j.id;$('jstat').textContent='· '+j.status;
   $('total').textContent=j.steps.some(s=>s.cost)?'$'+j.steps.reduce((a,s)=>a+s.cost,0).toFixed(3):'';
+  $('dir').innerHTML=j.direction?`<div class="card" style="margin-bottom:12px"><b>🎬 Direction</b> <span class="m">${esc(j.direction.concept)}</span>
+   <div class="m" style="margin-top:6px">Captions: ${esc(j.direction.captions)} · Music: ${esc(j.direction.music)} · ${j.direction.cards} cards · ${j.direction.zooms} punch-ins · ${j.direction.sfx} SFX${j.tight?` · dead air cut: ${j.tight.saved}s`:''}</div>
+   ${j.edl?`<div class="m" style="margin-top:6px">Timeline: ${j.edl.cards.map(esc).join(' · ')}</div>`:''}</div>`:'';
   $('steps').innerHTML=j.steps.map((s,i)=>`<div class="step ${s.status}"><div class="sh"><span class="dot"></span>
    <div><div class="t">${i+1}. ${esc(s.title)}</div><div class="m">${esc(s.model)}</div></div><span class="sp"></span>
    <span class="pill">${s.tokens.in||s.tokens.out?`${s.tokens.in}↑ ${s.tokens.out}↓ · $${s.cost.toFixed(3)} · `:''}${s.startedAt?dur(s)+'s':''}</span>
