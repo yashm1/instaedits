@@ -1,0 +1,11 @@
+{
+  "name": "instaedits",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Script + video in, edited reel out. Opus plans, Sonnet builds Remotion, Sonnet/Haiku drives the Edits app.",
+  "scripts": {
+    "start": "node server/index.mjs",
+    "setup": "cd remotion && npm install"
+  }
+}
