@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Script + video in, edited reel out. Opus plans, Sonnet builds Remotion, Sonnet/Haiku drives the Edits app.",
+  "description": "AI video editing pipeline for Instagram Reels: script + talking-head video in, edited Reel out \u2014 Remotion infographics, captions, music and SFX. Claude plans, Remotion renders, the Edits app assembles.",
   "scripts": {
     "start": "node server/index.mjs",
     "test": "node --test test/",
@@ -11,5 +11,29 @@
   },
   "engines": {
     "node": ">=22.18"
-  }
+  },
+  "license": "MIT",
+  "author": "Yash Mantri (https://github.com/yashm1)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yashm1/instaedits.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yashm1/instaedits/issues"
+  },
+  "homepage": "https://github.com/yashm1/instaedits#readme",
+  "keywords": [
+    "ai-video-editing",
+    "instagram-reels",
+    "short-form-video",
+    "remotion",
+    "claude",
+    "claude-code",
+    "mcp",
+    "video-automation",
+    "content-creation",
+    "infographics",
+    "captions",
+    "retention"
+  ]
 }
