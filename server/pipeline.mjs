@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { runClaude, MODELS, writeJson } from './claude.mjs';
 import * as P from './prompts.mjs';
 import { EDITS_URL, editsAuthHeaders } from './edits-mcp.mjs';
+import { applyGuardrails } from './guardrails.mjs';
 import { transcribe, planCuts, tighten, sentences, buildEdl, probe as probeVideo } from './media.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -16,7 +17,7 @@ const metapilotMcp = () => JSON.stringify({ mcpServers: { 'metapilot-native': { 
 export const bus = new EventEmitter();
 const jobs = new Map();
 
-const STEP_DEFS = (q) => [
+export const STEP_DEFS = (q) => [
   { key: 'probe', title: 'Probe video', model: 'local (ffprobe)' },
   { key: 'transcribe', title: 'Word-level transcript', model: 'local (Edits captions model)' },
   { key: 'tighten', title: 'Cut dead air → tight.mp4', model: 'local (ffmpeg)' },
@@ -117,7 +118,9 @@ const STEPS = {
       prompt: P.directorPrompt({ script: job.state.script, sentences: sentences(words, cuts.toOut), duration: cuts.total, library }),
       cwd: job.dir, budget: job.state.budgets.direction, onEvent: log, signal: job.abort.signal,
     });
-    const d = r.structured ?? JSON.parse(r.text.match(/\{[\s\S]*\}/)[0]);
+    const raw = r.structured ?? JSON.parse(r.text.match(/\{[\s\S]*\}/)[0]);
+    const { direction: d, notes } = applyGuardrails(raw, { totalSeconds: cuts.total, scriptWordCount: job.state.script.trim().split(/\s+/).length });
+    notes.forEach((n) => log(`🛡 ${n}`));
     writeJson(f(job, 'direction.json'), d);
     job.state.direction = { concept: d.concept, cards: d.scenes.length, zooms: d.zooms.length, sfx: d.sfx.length, captions: `${d.captions.style} · ${d.captions.highlightColor}`, music: `${d.music.query} @ ${d.music.volume} (ducked ${d.music.duckedVolume})` };
     log(`🎬 ${d.concept}`);
