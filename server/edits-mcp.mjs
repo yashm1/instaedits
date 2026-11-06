@@ -1,14 +1,8 @@
 // Minimal MCP (streamable-HTTP) client for the local Edits app. Zero LLM tokens: deterministic calls from Node.
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { config } from './config.mjs';
 
-// Load .env.local (gitignored) once: METAPILOT_TOKEN=<Edits → Settings → Automation → Access token>
-const envFile = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../.env.local');
-if (fs.existsSync(envFile)) for (const l of fs.readFileSync(envFile, 'utf8').split('\n')) { const m = l.match(/^\s*([A-Z_]+)\s*=\s*(.*?)\s*$/); if (m && !(m[1] in process.env)) process.env[m[1]] = m[2].replace(/^['"]|['"]$/g, ''); }
-
-export const EDITS_URL = process.env.METAPILOT_URL || 'http://127.0.0.1:19501/mcp';
-export const editsAuthHeaders = () => (process.env.METAPILOT_TOKEN ? { Authorization: `Bearer ${process.env.METAPILOT_TOKEN}` } : {});
+export const EDITS_URL = config.editsUrl;
+export const editsAuthHeaders = () => (config.editsToken() ? { Authorization: `Bearer ${config.editsToken()}` } : {});
 const URL_ = EDITS_URL;
 let sid = null, rid = 1;
 

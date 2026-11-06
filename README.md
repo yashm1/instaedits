@@ -2,11 +2,21 @@
 
 Script + video in → edited Reel out. Local dashboard that runs the whole workflow and shows every step.
 
+## Prerequisites
+**macOS + the [Edits](https://www.edits.app) desktop app** (the only supported editor; it must be open with Automation enabled), [Claude Code](https://claude.com/claude-code) CLI logged in, `ffmpeg`/`ffprobe` on PATH, Node ≥ 22.18.
+
 ```
 npm run setup      # installs Remotion deps (once)
+cp .env.example .env.local   # then paste your Edits token
 npm start          # http://127.0.0.1:4399
 ```
-Requires: `claude` CLI (logged in), `ffmpeg`/`ffprobe`, Node 20+, the **Edits** app open with the `metapilot-native` MCP server running (default `http://127.0.0.1:19501/mcp`, override with `METAPILOT_URL`).
+Jobs run **one at a time** (one Edits app, one Remotion workspace); extra jobs show as `queued`.
+
+## Configuration
+Everything environment-specific is in [`server/config.mjs`](server/config.mjs): models **by role** (director / coder / editor high / editor fast), per-step USD caps, ports, canvas, jobs dir. Override with env vars (see `.env.example`).
+
+## Security model
+The server binds to 127.0.0.1 only and rejects requests with a foreign `Host` (DNS rebinding) or `Origin` (cross-site POST), requires `application/json`, caps body size, whitelists request fields, validates job ids (no path traversal) and clamps budgets. The Edits token is passed to `claude` through a 0600 temp file, never on the command line.
 
 ## One-time setup: Edits access token
 Edits → Settings → Automation → copy the **Access token**, then:

@@ -1,11 +1,11 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { config } from './config.mjs';
 
-export const MODELS = {
-  opus: 'claude-opus-5-5',
-  sonnet: 'claude-sonnet-5-5',
-  haiku: 'claude-haiku-5-5',
-};
+// Roles → model ids live in config.mjs. Keys kept for readability at call sites.
+export const MODELS = { opus: config.models.director, sonnet: config.models.coder, haiku: config.models.editorFast };
 
 const NO_MCP = '{"mcpServers":{}}';
 
@@ -31,10 +31,25 @@ export function buildArgs({ model, system, tools = '', allowed, mcpConfig, budge
   return args;
 }
 
-export function runClaude({ prompt, cwd, onEvent, signal, ...opts }) {
+/** Write JSON that may contain secrets to a private temp file (dir 0700, file 0600). Never put secrets in argv: `ps` shows them. */
+export function writeSecretJson(obj) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'instaedits-'));
+  fs.chmodSync(dir, 0o700);
+  const file = path.join(dir, 'mcp.json');
+  fs.writeFileSync(file, JSON.stringify(obj), { mode: 0o600 });
+  return { file, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
+}
+
+export async function runClaude({ prompt, cwd, onEvent, signal, mcpServers, ...opts }) {
+  const secret = mcpServers ? writeSecretJson({ mcpServers }) : null;
+  try { return await spawnClaude({ prompt, cwd, onEvent, signal, opts: { ...opts, ...(secret ? { mcpConfig: secret.file } : {}) } }); }
+  finally { secret?.cleanup(); }
+}
+
+function spawnClaude({ prompt, cwd, onEvent, signal, opts }) {
   const args = buildArgs(opts);
   return new Promise((resolve, reject) => {
-    const p = spawn('claude', args, { cwd, stdio: ['pipe', 'pipe', 'pipe'], signal });
+    const p = spawn(config.claudeBin, args, { cwd, stdio: ['pipe', 'pipe', 'pipe'], signal });
     let buf = '', err = '', final = null;
     p.stdin.end(prompt);
     p.stdout.on('data', (d) => {
@@ -46,7 +61,7 @@ export function runClaude({ prompt, cwd, onEvent, signal, ...opts }) {
         let ev; try { ev = JSON.parse(line); } catch { continue; }
         if (ev.type === 'assistant') {
           for (const b of ev.message?.content ?? []) {
-            if (b.type === 'tool_use') onEvent?.(`🔧 ${b.name.replace('mcp__metapilot-native__', '')} ${JSON.stringify(b.input).slice(0, 90)}`);
+            if (b.type === 'tool_use') onEvent?.(`🔧 ${b.name.replace(`mcp__${config.editsServer}__`, '')} ${JSON.stringify(b.input).slice(0, 90)}`);
             else if (b.type === 'text' && b.text.trim()) onEvent?.(`💬 ${b.text.trim().slice(0, 140)}`);
           }
         } else if (ev.type === 'result') final = ev;

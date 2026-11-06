@@ -16,3 +16,6 @@ export const theme = {
 
 // Instagram UI covers ~14% top and ~20% bottom; captions live at ~68% height. Cards keep clear of all three.
 export const safe = { top: 270, bottom: 620, tagTop: 276, contentTop: 350 };
+
+// Canvas for every scene. server/config.mjs must match (enforced by test/config.test.mjs).
+export const canvas = { width: 1080, height: 1920, fps: 30 };

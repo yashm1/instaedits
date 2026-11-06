@@ -1,3 +1,4 @@
+import { config } from './config.mjs';
 import { CAPTION_STYLES, TRANSITIONS, SFX, MUSIC_QUERIES, SCENE_KINDS } from './catalog.mjs';
 
 // ───────────────────────── 1. DIRECTOR (Opus) ─────────────────────────
@@ -106,7 +107,7 @@ export const editPrompt = ({ tight, clipsDir, edl, out, quality }) => {
   const zm = edl.zooms.map((z) => `${z.start}s +${z.dur}s → ${Math.round(z.scale * 100)}% (ease in/out, centre on face)`).join('\n') || '(none)';
   const fx = edl.sfx.map((x) => `${x.at}s | ${x.name} | vol ${x.volume}`).join('\n') || '(none)';
   const m = edl.music, c = edl.captions;
-  return `Execute this EDL. Total length ${edl.duration.toFixed(1)}s, canvas 9:16 1080x1920, 30fps.
+  return `Execute this EDL. Total length ${edl.duration.toFixed(1)}s, canvas 9:16 ${config.canvas.width}x${config.canvas.height}, ${config.canvas.fps}fps.
 
 1) PROJECT: new project, set 9:16, import ${tight} onto the main track (it is already silence-tightened — do NOT cut or trim it).
 2) VOICE: enable voice enhance on the clip; normalise loudness to -14 LUFS (loudness/processAudio).
@@ -121,6 +122,6 @@ ${zm}
 ${fx}
 8) GRADE: ${edl.grade?.note ?? 'subtle contrast/saturation lift'} — apply with adjust tools (no LUT/filter presets).
 9) ${quality === 'high' ? 'QA: previewVideoFrames at ~5 points (each card start, 2 captioned talking-head moments, the last second). Fix: caption overlapping card text, clipped card, any clip not at its exact time, music louder than voice. Re-check only what you changed.' : 'No QA pass.'}
-10) EXPORT: H.264, 1080x1920, 30fps, high quality, to ${out}; wait until exportStatus is finished.
+10) EXPORT: H.264, ${config.canvas.width}x${config.canvas.height}, ${config.canvas.fps}fps, high quality, to ${out}; wait until exportStatus is finished.
 Final reply (max 3 lines): exported path, plus any deviations from the EDL.`;
 };
