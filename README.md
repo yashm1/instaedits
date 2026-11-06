@@ -18,7 +18,7 @@ echo 'METAPILOT_TOKEN=<paste>' > .env.local   # gitignored
 | # | Step | Who | Notes |
 |---|------|-----|-------|
 | 1 | Probe | ffprobe | |
-| 2 | Word-level transcript | Edits app captions model, called directly from Node | 0 LLM tokens. `TRANSCRIBER=whisper` is an opt-in slow fallback |
+| 2 | Word-level transcript | Edits app captions model, called directly from Node | 0 LLM tokens |
 | 3 | Cut dead air | ffmpeg | gaps >0.5s removed → `tight.mp4` (so the Edits agent never has to cut) |
 | 4 | **Creative direction** | **Opus 5.5** | cards + anchors, punch-ins, caption style/colour/keywords, music query + levels + ducking, SFX cues, grade. Constrained to options verified in the Edits app |
 | 5 | Resolve → EDL | local | anchors → exact timestamps on the tight timeline; zooms snapped to card-free gaps; SFX spaced |

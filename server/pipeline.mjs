@@ -94,7 +94,7 @@ const STEPS = {
   },
 
   async transcribe(job, step, log) {
-    await transcribe(job.state.video, job.dir, job.state.script, log, job.abort.signal);
+    await transcribe(job.state.video, job.dir, log);
   },
 
   async tighten(job, step, log) {

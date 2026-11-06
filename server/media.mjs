@@ -1,11 +1,9 @@
-// Local, token-free media work: whisper transcription, silence tightening, anchor → time resolution.
+// Local, token-free media work: Edits transcription, silence tightening, anchor → time resolution.
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
 import { tool as editsTool } from './edits-mcp.mjs';
 
-const WHISPER = process.env.WHISPER_BIN || '/Library/Frameworks/Python.framework/Versions/3.13/bin/whisper';
-const WHISPER_MODEL = process.env.WHISPER_MODEL || 'small.en';
 const norm = (w) => w.toLowerCase().replace(/[^a-z0-9]/g, '');
 
 function run(cmd, args, { onLine, signal } = {}) {
@@ -31,38 +29,22 @@ function extractWords(x, acc = []) {
 
 /**
  * Word timestamps from the Edits app's own captions model (default): zero LLM tokens, nothing extra to install.
- * Opt-in fallback: TRANSCRIBER=whisper (local openai-whisper CLI, slower).
  */
-export async function transcribe(video, dir, script, log, signal) {
+export async function transcribe(video, dir, log) {
   const out = path.join(dir, 'transcript.json');
   if (fs.existsSync(out)) { log('♻️ transcript cached'); return JSON.parse(fs.readFileSync(out, 'utf8')); }
-  let words;
-  if (process.env.TRANSCRIBER === 'whisper') words = await whisperWords(video, dir, script, log, signal);
-  else {
-    log('Edits app: new project + import…');
-    await editsTool('newProject');
-    const imp = await editsTool('importMedia', { path: video });
-    const id = imp?.id ?? imp?.itemId ?? imp?.clipId ?? imp?.items?.[0]?.id ?? imp?.item?.id;
-    if (!id) throw new Error('importMedia returned no id: ' + JSON.stringify(imp).slice(0, 200));
-    log('Edits app: transcribing…');
-    const tr = await editsTool('transcribeClip', { id, language: 'en', mergeSplitWords: true });
-    words = extractWords(tr.words ?? tr);
-    fs.writeFileSync(path.join(dir, 'transcript.raw.json'), JSON.stringify(tr));
-  }
+  log('Edits app: new project + import…');
+  await editsTool('newProject');
+  const imp = await editsTool('importMedia', { path: video });
+  const id = imp?.id ?? imp?.itemId ?? imp?.clipId ?? imp?.items?.[0]?.id ?? imp?.item?.id;
+  if (!id) throw new Error('importMedia returned no id: ' + JSON.stringify(imp).slice(0, 200));
+  log('Edits app: transcribing…');
+  const tr = await editsTool('transcribeClip', { id, language: 'en', mergeSplitWords: true });
+  const words = extractWords(tr.words ?? tr);
   if (!words.length) throw new Error('no words in transcript');
   fs.writeFileSync(out, JSON.stringify({ words }));
   log(`${words.length} words aligned`);
   return { words };
-}
-
-async function whisperWords(video, dir, script, log, signal) {
-  const wav = path.join(dir, 'audio.wav');
-  await run('ffmpeg', ['-y', '-loglevel', 'error', '-i', video, '-vn', '-ac', '1', '-ar', '16000', wav], { signal });
-  log(`whisper ${WHISPER_MODEL} (local fallback — slow)…`);
-  await run(WHISPER, [wav, '--model', WHISPER_MODEL, '--language', 'en', '--word_timestamps', 'True', '--fp16', 'False',
-    '--condition_on_previous_text', 'False', '--initial_prompt', script.slice(0, 600), '--output_format', 'json', '--output_dir', dir], { signal });
-  const raw = JSON.parse(fs.readFileSync(path.join(dir, 'audio.json'), 'utf8'));
-  return raw.segments.flatMap((s) => s.words ?? []).map((w) => ({ w: w.word.trim(), start: w.start, end: w.end })).filter((w) => w.w);
 }
 
 /** Cut dead air: keep speech segments (+pad), drop gaps > maxGap. Returns segments + src→out time map. */
