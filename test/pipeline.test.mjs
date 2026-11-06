@@ -114,3 +114,22 @@ test('a job cancelled before it starts never runs a step', async () => {
     assert.ok(j.state.steps.every((s) => s.status === 'pending'));
   } finally { fs.rmSync(j.dir, { recursive: true, force: true }); fs.rmSync(d, { recursive: true, force: true }); }
 });
+
+import { recoverStaleJobs } from '../server/pipeline.mjs';
+test('recoverStaleJobs marks interrupted jobs as resumable errors, leaves finished ones alone', () => {
+  const { d, v } = tmpVideo();
+  const a = createJob({ script: 's', video: v, jobId: `tr-a-${Date.now()}` }); // queued
+  const b = createJob({ script: 's', video: v, jobId: `tr-b-${Date.now()}` });
+  b.state.status = 'done'; fs.writeFileSync(path.join(b.dir, 'state.json'), JSON.stringify(b.state));
+  a.state.status = 'running'; a.state.steps[1].status = 'running';
+  fs.writeFileSync(path.join(a.dir, 'state.json'), JSON.stringify(a.state));
+  try {
+    assert.ok(recoverStaleJobs() >= 1);
+    const disk = JSON.parse(fs.readFileSync(path.join(a.dir, 'state.json'), 'utf8'));
+    assert.equal(disk.status, 'error'); assert.equal(disk.interrupted, true);
+    assert.equal(disk.steps[1].status, 'error'); assert.match(disk.steps[1].error, /interrupted/);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(b.dir, 'state.json'), 'utf8')).status, 'done');
+    // now it can be resumed (it would have been stuck "running" forever before)
+    assert.doesNotThrow(() => { const j = resumeJob(a.id, 'probe'); j.abort.abort(); });
+  } finally { for (const j of [a, b]) fs.rmSync(j.dir, { recursive: true, force: true }); fs.rmSync(d, { recursive: true, force: true }); }
+});

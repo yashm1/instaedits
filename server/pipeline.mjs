@@ -77,6 +77,22 @@ export function startJob(job, opts = {}) {
   return queue.enqueue(() => runJob(job, opts));
 }
 
+/** On boot, anything still 'running'/'queued' was killed with the previous process: mark it resumable instead of stuck forever. */
+export function recoverStaleJobs() {
+  let n = 0;
+  if (!fs.existsSync(JOBS)) return n;
+  for (const id of fs.readdirSync(JOBS)) {
+    if (!isSafeId(id) || !fs.existsSync(path.join(JOBS, id, 'state.json'))) continue;
+    const st = getJob(id);
+    if (!st || (st.status !== 'running' && st.status !== 'queued')) continue;
+    st.status = 'error'; st.interrupted = true;
+    for (const step of st.steps) if (step.status === 'running') { step.status = 'error'; step.error = 'interrupted (server restarted)'; }
+    writeJson(path.join(JOBS, id, 'state.json'), st);
+    n++;
+  }
+  return n;
+}
+
 export function resumeJob(id, from = 'probe') {
   if (!isSafeId(id)) throw new Error('invalid job id');
   const state = getJob(id);

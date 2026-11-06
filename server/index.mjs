@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config } from './config.mjs';
-import { bus, createJob, startJob, resumeJob, getJob, listJobs, cancel } from './pipeline.mjs';
+import { bus, createJob, startJob, resumeJob, recoverStaleJobs, getJob, listJobs, cancel } from './pipeline.mjs';
 import { checkRequest, isSafeId, readJson } from './security.mjs';
 
 const PUBLIC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../public');
@@ -45,5 +45,6 @@ export const server = http.createServer(async (req, res) => {
 });
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  server.listen(port, host, () => console.log(`Instaedits dashboard → http://${host}:${port}`));
+  const stale = recoverStaleJobs();
+  server.listen(port, host, () => console.log(`Instaedits dashboard → http://${host}:${port}${stale ? ` (${stale} interrupted job(s) marked resumable)` : ''}`));
 }
