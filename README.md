@@ -37,3 +37,7 @@ echo 'METAPILOT_TOKEN=<paste>' > .env.local   # gitignored
 
 ## Layout
 `server/` pipeline + SSE API · `public/index.html` dashboard · `remotion/` component library + renderer · `jobs/` per-run artifacts (gitignored)
+
+## Tests & workflow
+`npm test` (Node built-in runner, no deps): transcript math, anchor matching, EDL resolver, guardrails, theme contrast/safe zones, prompt↔catalog consistency, CLI flags, MCP client (mock server), pipeline wiring, Remotion typecheck.
+Nothing is committed to `main` directly: every change is a PR with a self-review and tests. Research behind the creative rules: [docs/research.md](docs/research.md).

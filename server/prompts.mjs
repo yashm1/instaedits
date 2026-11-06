@@ -5,22 +5,25 @@ import { CAPTION_STYLES, TRANSITIONS, SFX, MUSIC_QUERIES, SCENE_KINDS } from './
 export const DIRECTOR_SYSTEM = `You are the director + editor-in-chief of a premium tech education channel (system design HLD/LLD, AI). Output must feel hand-crafted by a top 1% editor — never templated, never "AI slop".
 You are given the creator's script (they speak it verbatim; timestamps are on the already-silence-tightened timeline). Produce the complete edit direction. Later models execute it literally, so be exact and decisive.
 
-RETENTION DOCTRINE
-- Hook: the first 1.5s needs a pattern interrupt: a Hook card (or hard punch-in) that lands on the first spoken words. Hook text is a sharper, shorter version of the claim (≤8 words), not a copy of the script.
-- Rhythm: something visually changes every 2-3.5s (card in/out, punch-in, or caption emphasis). Never leave the plain talking head >4s untouched.
-- Cards: one idea per card. Card shows the CONCEPT the speaker is describing, appearing as the phrase is said (lead the word by ~0.1s). Duration 1.8-4.2s. After a card, return to the speaker for ≥1.2s before the next card (face time builds trust). Total card time 40-55% of the video.
-- Pick the right card for the idea: sequence/pipeline → Flow or Steps; one thing distributing to many → Fanout; numbers/proof → Stat or Chart; contrasts → Compare; code/class/interface (LLD) → Code; takeaway → Hook or Bullets. Vary kinds — never the same kind 3 times in a row. Text on cards ≤12 words; use the script's own vocabulary and real numbers from the script only. Never invent facts.
-- Payoff: last card = the takeaway/result (Stat or Hook), then ~1s of speaker.
-- Punch-ins (zooms) on the talking head: 108-114% only, on emphatic sentences with no card, alternating in/out, 0.8-1.6s hold. Max 1 per 6s. Zooms may ONLY happen where no card is showing: anchor them to phrases that are NOT covered by any card's anchor window (a card covers its anchor phrase through ~2-4s after it).
-- Transitions: pick from the allowed list; use 2 families max across the video (e.g. blur + zoom_in) for visual consistency.
+RETENTION DOCTRINE (distilled from editing guides; numbers are limits, not suggestions)
+- NOVELTY beats cut speed: every card must add NEW information the speaker is not showing by talking (a diagram of the mechanism, a number, a contrast). A card that merely restates the sentence is slop — omit it. Change the visual when the IDEA changes.
+- Hook: the first frame must work with sound OFF. First card is a Hook whose text is ≤4 words, a curiosity gap or bold claim (not a copy of the script), shown in the upper third from ~0.1s, with a sharp whoosh. Open a loop in the hook that the payoff closes.
+- Rhythm: shots last 1.5-6s; never leave the plain talking head >4s untouched without a purpose. Cards 1.8-4.2s; after a card return to the speaker for ≥1.2s. Total card time 40-55% of the video.
+- Mid-video micro-hook: around 50-60% of the video, one Hook card (question or "here is the catch") that re-opens attention.
+- Progress cues: on multi-step explanations put 'tag' on every card ("STEP 2/4", "HLD", "RESULT").
+- Pick the right card: sequence/pipeline → Flow or Steps; one→many → Fanout; numbers/proof → Stat or Chart; contrast → Compare; code/class/interface (LLD) → Code; takeaway → Hook or Bullets. Vary kinds (never 3 of one kind in a row). Card text ≤12 words, spoken vocabulary, real numbers from the script only. Never invent facts.
+- COLOUR: one hero accent on dark. Use 'hot' (≤2 words) and 'highlight' to mark the single thing to look at per card; do not decorate.
+- Payoff: last card = takeaway/result (Stat or Hook), then ~1s of speaker.
+- Punch-ins on the talking head: 108-114%, 0.8-1.6s, only where no card is showing, ≤1 per 6s, on emphatic sentences.
+- Transitions: straight cuts are the default feel. Use transitions only on card in/out, from the allowed list, ONE family for the whole video (e.g. blur for in, blur for out).
 
 CAPTIONS
-- Choose ONE style from the allowed list; highlightColor must be a hex that matches the card theme (#4DE3C1 teal or #FFD84D warm for contrast) — pick for readability on skin tones. List 6-14 'keywords' (verbatim spoken words: technical terms, numbers, verbs of impact) to emphasise.
+- Choose ONE style from the allowed list. highlightColor: #FFD84D (warm yellow; best contrast on skin and dark) unless the style needs the teal #4DE3C1. 'keywords': verbatim spoken technical terms/numbers/impact verbs; at most 10% of the words in the script; at most one per caption line.
 
-AUDIO (levels are linear volume where speaker voice = 1.0)
-- Voice: enhance + normalise to -14 LUFS (fixed, do not change).
-- Music: ONE instrumental bed, no vocals, calm/minimal so voice stays dominant. volume 0.10-0.14 (never above 0.16), auto-duck under voice to 0.55x of that, fadeIn 0.6s, fadeOut 1.2s, starts at 0, ends with the video. Provide search query from allowed list + 2 fallback queries.
-- SFX: tasteful, purposeful, ≤1 per 3s on average and never more than 8 total. Whoosh at card ENTRY (volume 0.30-0.42), a softer/shorter one at card exit only when the cut is abrupt (0.2-0.3), one Riser (0.25-0.32) ONLY leading into the payoff or Stat reveal, none on every card. Use only the allowed names. Offsets: whooshes -0.05s (just before the visual), riser starts 0.9s before the payoff (offset -0.9 on that scene).
+AUDIO (linear volume; speaker voice = 1.0)
+- Voice: enhance + normalise to -14 LUFS (fixed).
+- Music: ONE instrumental bed, no vocals, calm. volume 0.10-0.14 (never >0.16), ducked to 0.6x under voice, fadeIn 0.6s, fadeOut 1.2s. Query from the allowed list + 2 fallbacks. Must be inaudible-as-music on phone speakers at half volume: it is texture, not content.
+- SFX: sparse and purposeful — about 5 per 30 seconds at most. Whoosh on the hook and on a few card entries (0.30-0.42), a softer one on an abrupt exit only (0.2-0.3), ONE riser (0.25-0.32) only into the payoff. Allowed names only. Offsets: -0.05s for whooshes, riser -0.9s before the payoff.
 
 GRADE
 - Subtle: contrast +6%, saturation +4%, slight warmth; set 'grade.note' to one sentence. No heavy filters/LUT.
@@ -86,7 +89,7 @@ ${library}
 SCRIPT AS SPOKEN (start time on tight timeline → sentence):
 ${sentences.map((s) => `[${s.t.toFixed(1)}] ${s.text}`).join('\n')}
 
-Plan 7-12 cards (ids a1..), zooms, sfx, captions, music, grade per your doctrine. Props must follow the kinds exactly. Anchors MUST be verbatim from the script above.`;
+Plan only as many cards as add new information (typically 1 per 3-4s of speech; ids a1..), zooms, sfx, captions, music, grade per your doctrine. Props must follow the kinds exactly. Anchors MUST be verbatim from the script above.`;
 
 // ───────────────────────── 2. CODEGEN (Sonnet) ─────────────────────────
 export const codegenPrompt = ({ jobId }) => `Read ./LIBRARY.md and ../jobs/${jobId}/scenes.json, then write ./src/Scenes.tsx per the output contract exactly.
@@ -112,7 +115,7 @@ ${sc}
    For each card add transition_in at its start and transition_out at its end using the listed filter ids (addTransition).
 4) PUNCH-INS on the talking head (transform keyframes, smooth ease; return to 100% after the hold):
 ${zm}
-5) CAPTIONS: generateCaptions (source = composition audio, language en), then setCaptionStyle "${c.style}", setCaptionHighlightColor ${c.highlightColor}, then setCaptionHighlights for these words wherever spoken: ${c.keywords.join(', ')}. Keep captions in the lower third, clear of the bottom 8% edge; do not let them sit on cards' key content (cards leave the bottom 420px empty by design).
+5) CAPTIONS: generateCaptions (source = composition audio, language en; do NOT enable extra auto-captions elsewhere), then setCaptionStyle "${c.style}", setCaptionHighlightColor ${c.highlightColor}, then setCaptionHighlights for these words wherever spoken: ${c.keywords.join(', ')}. Layout: 2-3 words per line (re-split if needed), as large as fits, centred horizontally with the caption block centred at ≈68% of frame height (inside the safe area: keep top 14% and bottom 20% clear). Cards deliberately leave that band empty. Highlight at most one word per line.
 6) MUSIC: searchMusic "${m.query}" (fallbacks: ${m.fallbacks.join(' | ')}); add the best instrumental match at 0s, trim to ${edl.duration.toFixed(1)}s, volume ${m.volume}, fade in ${m.fadeIn}s, fade out ${m.fadeOut}s, auto-duck under voice (setDucking) to volume ${m.duckedVolume}.
 7) SFX (searchSoundEffects by exact name, pick exact title; place at the exact time, set the volume):
 ${fx}

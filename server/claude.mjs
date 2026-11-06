@@ -13,7 +13,7 @@ const NO_MCP = '{"mcpServers":{}}';
  * Run `claude -p` headlessly with a minimal footprint (no skills, no user settings, only the tools/MCP we pass).
  * Returns { text, structured, cost, tokens }.
  */
-export function runClaude({ model, prompt, system, tools = '', allowed, mcpConfig, cwd, budget = 1, schema, effort, onEvent, signal }) {
+export function buildArgs({ model, system, tools = '', allowed, mcpConfig, budget = 1, schema, effort }) {
   const args = [
     '-p', '--model', model,
     '--output-format', 'stream-json', '--verbose',
@@ -28,7 +28,11 @@ export function runClaude({ model, prompt, system, tools = '', allowed, mcpConfi
   if (system) args.push('--append-system-prompt', system);
   if (schema) args.push('--json-schema', JSON.stringify(schema));
   if (effort) args.push('--effort', effort);
+  return args;
+}
 
+export function runClaude({ prompt, cwd, onEvent, signal, ...opts }) {
+  const args = buildArgs(opts);
   return new Promise((resolve, reject) => {
     const p = spawn('claude', args, { cwd, stdio: ['pipe', 'pipe', 'pipe'], signal });
     let buf = '', err = '', final = null;

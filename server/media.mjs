@@ -48,7 +48,7 @@ export async function transcribe(video, dir, log) {
 }
 
 /** Cut dead air: keep speech segments (+pad), drop gaps > maxGap. Returns segments + src→out time map. */
-export function planCuts(words, duration, { maxGap = 0.5, padIn = 0.1, padOut = 0.16 } = {}) {
+export function planCuts(words, duration, { maxGap = 0.4, padIn = 0.1, padOut = 0.16 } = {}) {
   const segs = [];
   for (const w of words) {
     const s = Math.max(0, w.start - padIn), e = Math.min(duration, w.end + padOut);
@@ -88,15 +88,26 @@ export function sentences(words, toOut) {
   return out;
 }
 
-/** Find where an anchor phrase is actually spoken (best in-order token overlap, earliest wins ties). -1 if weak. */
+const lcs = (a, b) => {
+  const dp = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
+  for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) dp[i][j] = a[i - 1] === b[j - 1] ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1]);
+  return dp[a.length][b.length];
+};
+
+/**
+ * Where is the anchor phrase actually spoken? Longest-common-subsequence of anchor tokens vs. a sliding window, so one
+ * mis-heard/missing word doesn't break the match. A window must START on a word of the anchor (never on junk before it).
+ * Earliest best window wins; returns -1 if under 60% of the anchor matched.
+ */
 export function findAnchor(words, anchor, from = 0) {
   const a = anchor.split(/\s+/).map(norm).filter(Boolean);
   if (!a.length) return -1;
+  const set = new Set(a);
   const ws = words.map((w) => norm(w.w));
   let best = -1, bestScore = 0;
   for (let i = from; i < ws.length; i++) {
-    let score = 0, k = 0;
-    for (let j = i; j < Math.min(ws.length, i + a.length + 3) && k < a.length; j++) if (ws[j] === a[k]) { score++; k++; }
+    if (!set.has(ws[i])) continue;
+    const score = lcs(a, ws.slice(i, i + a.length + 3));
     if (score > bestScore) { bestScore = score; best = i; if (score === a.length) break; }
   }
   return bestScore >= Math.max(1, Math.ceil(a.length * 0.6)) ? best : -1;
@@ -115,7 +126,8 @@ export function buildEdl(direction, words, cuts, log) {
   scenes.sort((a, b) => a.t - b.t);
   const edl = { duration: cuts.total, scenes: [], zooms: [], sfx: [] };
   scenes.forEach((s, idx) => {
-    const start = Math.max(prevEnd + 0.45, s.t - 0.08);
+    // opening Hook lands on the very first frames (silent-test: premise readable with sound off)
+    const start = idx === 0 && s.kind === 'Hook' && s.t < 1.5 ? 0.1 : Math.max(prevEnd + 0.45, s.t - 0.08);
     const nextT = scenes[idx + 1]?.t ?? cuts.total;
     const dur = Math.min(s.dur, nextT - 0.45 - start, cuts.total - start);
     if (dur < 1.2) { log(`⚠️ no room for ${s.id} (${dur.toFixed(1)}s) — dropped`); return; }

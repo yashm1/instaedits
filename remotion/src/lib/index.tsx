@@ -2,14 +2,12 @@ import React from 'react';
 import {AbsoluteFill, Easing, interpolate, spring, useCurrentFrame, useVideoConfig} from 'remotion';
 import {loadFont} from '@remotion/google-fonts/Inter';
 import {loadFont as loadMono} from '@remotion/google-fonts/JetBrainsMono';
+import {theme, safe} from './theme';
 
 const {fontFamily} = loadFont('normal', {weights: ['500', '700', '800'], subsets: ['latin']});
 const mono = loadMono('normal', {weights: ['500'], subsets: ['latin']}).fontFamily;
 
-export const theme = {
-  bg: '#080d1c', card: '#121a33', cardHi: '#18224a', line: '#27345f', text: '#f5f7ff', dim: '#97a4d1',
-  accent: '#4de3c1', accent2: '#7c8cff', warn: '#ffb454', hot: '#ff6b8b',
-};
+export {theme, safe};
 
 // ───────── motion helpers ─────────
 const useSpring = (delay = 0, stiffness = 150, damping = 17) => {
@@ -26,15 +24,15 @@ const Stage: React.FC<{children: React.ReactNode; tag?: string; align?: 'center'
   const t = f / 30;
   return (
     <AbsoluteFill style={{background: theme.bg, fontFamily, color: theme.text}}>
-      <AbsoluteFill style={{background: `radial-gradient(1100px 1100px at ${70 + Math.sin(t * 0.6) * 8}% ${18 + Math.cos(t * 0.5) * 4}%, ${theme.accent2}38, transparent 62%), radial-gradient(900px 900px at ${15 + Math.cos(t * 0.5) * 6}% 92%, ${theme.accent}26, transparent 60%)`}} />
+      <AbsoluteFill style={{background: `radial-gradient(1100px 1100px at ${70 + Math.sin(t * 0.6) * 8}% ${18 + Math.cos(t * 0.5) * 4}%, ${theme.glow}88, transparent 62%), radial-gradient(900px 900px at ${15 + Math.cos(t * 0.5) * 6}% 92%, ${theme.accent}26, transparent 60%)`}} />
       <AbsoluteFill style={{backgroundImage: `linear-gradient(${theme.line}33 1px, transparent 1px), linear-gradient(90deg, ${theme.line}33 1px, transparent 1px)`, backgroundSize: '90px 90px', opacity: 0.35, maskImage: 'radial-gradient(circle at 50% 45%, black 20%, transparent 75%)'}} />
       {tag ? (
-        <div style={{position: 'absolute', top: 150, left: 80, display: 'flex', alignItems: 'center', gap: 16, ...pop(useSpring(0))}}>
+        <div style={{position: 'absolute', top: safe.tagTop, left: 80, display: 'flex', alignItems: 'center', gap: 16, ...pop(useSpring(0))}}>
           <div style={{width: 14, height: 14, borderRadius: 7, background: theme.accent}} />
           <div style={{fontSize: 32, letterSpacing: 7, color: theme.accent, textTransform: 'uppercase', fontWeight: 800}}>{tag}</div>
         </div>
       ) : null}
-      <AbsoluteFill style={{padding: '240px 76px 420px', justifyContent: align === 'center' ? 'center' : 'flex-start'}}>{children}</AbsoluteFill>
+      <AbsoluteFill style={{padding: `${safe.contentTop}px 76px ${safe.bottom}px`, justifyContent: align === 'center' ? 'center' : 'flex-start'}}>{children}</AbsoluteFill>
     </AbsoluteFill>
   );
 };
@@ -68,7 +66,7 @@ export const Hook: React.FC<{text: string; hot?: string[]; sub?: string; tag?: s
   const f = useCurrentFrame();
   const words = text.split(' ');
   return (
-    <Stage tag={tag}>
+    <Stage tag={tag} align="start">
       <div style={{fontSize: 124, fontWeight: 800, lineHeight: 1.04, letterSpacing: -2}}>
         {words.map((w, i) => {
           const p = spring({frame: f - i * 4, fps: 30, config: {damping: 14, stiffness: 190}});
@@ -83,25 +81,27 @@ export const Hook: React.FC<{text: string; hot?: string[]; sub?: string; tag?: s
 export const Title: React.FC<{text: string; sub?: string; tag?: string}> = ({text, sub, tag}) => <Hook text={text} sub={sub} tag={tag} />;
 
 /** Vertical architecture flow with animated data packets. */
-export const Flow: React.FC<{title?: string; nodes: {label: string; note?: string; icon?: IconName}[]; highlight?: number; tag?: string}> = ({title, nodes, highlight, tag}) => {
+export const Flow: React.FC<{title?: string; nodes: {label: string; note?: string; icon?: IconName}[]; highlight?: number | string; tag?: string}> = ({title, nodes, highlight, tag}) => {
   const f = useCurrentFrame();
+  // accept a node index OR its label (directors naturally write the label)
+  const hi = typeof highlight === 'string' ? nodes.findIndex((n) => n.label.toLowerCase() === highlight.toLowerCase()) : highlight;
   return (
     <Stage tag={tag}>
       <Heading text={title} />
       {nodes.map((n, i) => {
         const p = useSpring(8 + i * 11);
-        const hot = highlight === i;
+        const hot = hi === i;
         const grow = interpolate(f - (14 + i * 11), [0, 10], [0, 1], {...clamp, easing: Easing.out(Easing.quad)});
         const packet = ((f - 24 - i * 11) % 36) / 36;
         return (
           <React.Fragment key={i}>
             <div style={{display: 'flex', alignItems: 'center', gap: 28, background: hot ? theme.cardHi : theme.card, border: `3px solid ${hot ? theme.accent : theme.line}`, borderRadius: 30, padding: '26px 34px', boxShadow: hot ? `0 0 60px ${theme.accent}33` : 'none', ...pop(p)}}>
-              <Icon name={n.icon} size={78} color={hot ? theme.accent : theme.accent2} />
+              <Icon name={n.icon} size={78} color={hot ? theme.accent : theme.mute} />
               <div><div style={{fontSize: 54, fontWeight: 800}}>{n.label}</div>{n.note ? <div style={{fontSize: 34, color: theme.dim, marginTop: 4}}>{n.note}</div> : null}</div>
             </div>
             {i < nodes.length - 1 ? (
               <div style={{position: 'relative', height: 64, width: 6, margin: '0 auto'}}>
-                <div style={{position: 'absolute', inset: 0, background: `linear-gradient(${theme.accent}, ${theme.accent2})`, transform: `scaleY(${grow})`, transformOrigin: 'top', borderRadius: 3}} />
+                <div style={{position: 'absolute', inset: 0, background: theme.mute, transform: `scaleY(${grow})`, transformOrigin: 'top', borderRadius: 3}} />
                 {grow >= 1 && packet >= 0 ? <div style={{position: 'absolute', left: -7, top: packet * 56, width: 20, height: 20, borderRadius: 10, background: '#fff', boxShadow: `0 0 20px ${theme.accent}`}} /> : null}
               </div>
             ) : null}
@@ -133,7 +133,7 @@ export const Fanout: React.FC<{title?: string; from: {label: string; icon?: Icon
           const dot = ((f - 24 - i * 4) % 30) / 30;
           return (
             <g key={i}>
-              <path d={path} stroke={theme.accent2} strokeWidth={5} fill="none" strokeDasharray={400} strokeDashoffset={400 * (1 - d)} strokeLinecap="round" />
+              <path d={path} stroke={theme.mute} strokeWidth={5} fill="none" strokeDasharray={400} strokeDashoffset={400 * (1 - d)} strokeLinecap="round" />
               {d >= 1 && dot >= 0 ? <circle r={9} fill="#fff" style={{filter: `drop-shadow(0 0 8px ${theme.accent})`}} cx={(1 - dot) * (1 - dot) * (1 - dot) * (W / 2) + 3 * (1 - dot) * (1 - dot) * dot * (W / 2) + 3 * (1 - dot) * dot * dot * x2 + dot * dot * dot * x2} cy={3 * (1 - dot) * (1 - dot) * dot * 100 + 3 * (1 - dot) * dot * dot * 80 + dot * dot * dot * 190} /> : null}
             </g>
           );
@@ -143,7 +143,7 @@ export const Fanout: React.FC<{title?: string; from: {label: string; icon?: Icon
         {to.map((t, i) => (
           <div key={i} style={{width: colW, padding: '0 8px', ...pop(useSpring(18 + i * 5))}}>
             <div style={{background: theme.card, border: `3px solid ${theme.line}`, borderRadius: 24, padding: '22px 6px', textAlign: 'center'}}>
-              <div style={{display: 'flex', justifyContent: 'center'}}><Icon name={t.icon} size={64} color={theme.accent2} /></div>
+              <div style={{display: 'flex', justifyContent: 'center'}}><Icon name={t.icon} size={64} color={theme.mute} /></div>
               <div style={{fontSize: n > 3 ? 28 : 34, fontWeight: 700, marginTop: 10}}>{t.label}</div>
             </div>
           </div>
@@ -190,7 +190,7 @@ export const Chart: React.FC<{title?: string; bars: {label: string; value: numbe
               <span>{b.label}</span><span style={{color: i === top ? theme.accent : theme.dim}}>{Math.round(b.value * Math.min(1, w / (b.value / max || 1)))}{b.unit ?? ''}</span>
             </div>
             <div style={{height: 46, background: theme.card, borderRadius: 23, overflow: 'hidden', border: `2px solid ${theme.line}`}}>
-              <div style={{height: '100%', width: `${w * 100}%`, borderRadius: 23, background: i === top ? `linear-gradient(90deg, ${theme.accent2}, ${theme.accent})` : theme.accent2}} />
+              <div style={{height: '100%', width: `${w * 100}%`, borderRadius: 23, background: i === top ? theme.accent : theme.mute}} />
             </div>
           </div>
         );
@@ -242,7 +242,7 @@ export const Stat: React.FC<{value: string; label: string; sub?: string; tag?: s
   }
   return (
     <Stage tag={tag}>
-      <div style={{fontSize: shown.length > 7 ? 150 : 210, fontWeight: 800, lineHeight: 1, letterSpacing: -4, background: `linear-gradient(90deg, ${theme.accent}, ${theme.accent2})`, WebkitBackgroundClip: 'text', color: 'transparent', ...pop(useSpring(0))}}>{shown}</div>
+      <div style={{fontSize: shown.length > 7 ? 150 : 210, fontWeight: 800, lineHeight: 1, letterSpacing: -4, color: theme.accent, ...pop(useSpring(0))}}>{shown}</div>
       <div style={{fontSize: 70, fontWeight: 800, marginTop: 28, lineHeight: 1.1, ...pop(useSpring(10))}}>{label}</div>
       {sub ? <div style={{fontSize: 44, color: theme.dim, marginTop: 22, ...pop(useSpring(18))}}>{sub}</div> : null}
     </Stage>
@@ -264,7 +264,7 @@ export const Bullets: React.FC<{title?: string; items: string[]; tag?: string}> 
 export const Compare: React.FC<{left: {title: string; points: string[]}; right: {title: string; points: string[]}; tag?: string}> = ({left, right, tag}) => (
   <Stage tag={tag}>
     {[left, right].map((side, si) => {
-      const c = si ? theme.accent2 : theme.accent;
+      const c = si ? theme.warm : theme.accent;
       return (
         <div key={si} style={{background: theme.card, border: `3px solid ${c}`, borderRadius: 30, padding: '30px 36px', marginBottom: 34, boxShadow: `0 0 50px ${c}22`, ...pop(useSpring(si * 14))}}>
           <div style={{fontSize: 62, fontWeight: 800, color: c, marginBottom: 14}}>{side.title}</div>
