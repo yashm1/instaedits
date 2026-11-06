@@ -3,3 +3,4 @@ jobs/
 out/
 .DS_Store
 *.log
+.env.local
