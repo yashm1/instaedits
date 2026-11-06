@@ -1,7 +1,7 @@
 // Usage: node render.mjs <outDir>   — renders every composition in src/Scenes.tsx to <outDir>/<id>.mp4
 // Bundles ONCE, then renders each scene. Emits one JSON line per event for the dashboard.
 import {bundle} from '@remotion/bundler';
-import {renderMedia, selectComposition} from '@remotion/renderer';
+import {getCompositions, renderMedia, selectComposition} from '@remotion/renderer';
 import path from 'node:path';
 import fs from 'node:fs';
 import {fileURLToPath} from 'node:url';
@@ -12,20 +12,19 @@ fs.mkdirSync(outDir, {recursive: true});
 const emit = (o) => console.log(JSON.stringify(o));
 
 const serveUrl = await bundle({entryPoint: path.join(here, 'src/index.ts')});
-const probe = await selectComposition({serveUrl, id: 's1'}).catch(() => null);
-if (!probe) throw new Error('composition s1 not found');
+// Ask the bundle what it contains — no id-guessing convention.
+const ids = (await getCompositions(serveUrl)).map((c) => c.id).sort((a, b) => a.localeCompare(b, undefined, {numeric: true}));
+if (!ids.length) throw new Error('no compositions found in src/Scenes.tsx');
 
-// Discover ids by asking the bundle for the scene list via env-free convention: s1..s40.
-for (let i = 1; i <= 40; i++) {
-  const id = `s${i}`;
-  let comp;
-  try { comp = await selectComposition({serveUrl, id}); } catch { break; }
+for (const id of ids) {
+  const comp = await selectComposition({serveUrl, id});
   const outputLocation = path.join(outDir, `${id}.mp4`);
   if (fs.existsSync(outputLocation)) { emit({id, skipped: true}); continue; }
+  let last = -1;
   await renderMedia({
     composition: comp, serveUrl, codec: 'h264', outputLocation, crf: 18,
     concurrency: '50%', muted: true,
-    onProgress: ({progress}) => { if (Math.round(progress * 100) % 25 === 0) emit({id, progress: Math.round(progress * 100)}); },
+    onProgress: ({progress}) => { const pct = Math.floor(progress * 4) * 25; if (pct !== last) { last = pct; emit({id, progress: pct}); } },
   });
   emit({id, done: true});
 }

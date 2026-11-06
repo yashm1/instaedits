@@ -53,3 +53,64 @@ test('Remotion library typechecks (catches prop-type drift before a render does)
   if (!fs.existsSync('remotion/src/Scenes.tsx')) fs.copyFileSync('remotion/src/Scenes.default.tsx', 'remotion/src/Scenes.tsx');
   execFileSync('npx', ['tsc', '--noEmit'], { cwd: 'remotion', stdio: 'pipe' });
 });
+
+// ───────── validation, queueing and resume ─────────
+import { runJob, startJob, resumeJob, getJob } from '../server/pipeline.mjs';
+import { config } from '../server/config.mjs';
+
+const tmpVideo = () => { const d = fs.mkdtempSync('/tmp/ie-'); const v = path.join(d, 'v.mp4'); fs.writeFileSync(v, 'x'); return { d, v }; };
+
+test('createJob rejects traversal ids, bad quality, unknown or oversized budgets, bad video types', () => {
+  const { d, v } = tmpVideo();
+  try {
+    assert.throws(() => createJob({ script: 's', video: v, jobId: '../../evil' }), /invalid job id/);
+    assert.throws(() => createJob({ script: 's', video: v, quality: 'ultra' }), /quality/);
+    assert.throws(() => createJob({ script: 's', video: v, budgets: { edit: 999 } }), /between 0 and/);
+    assert.throws(() => createJob({ script: 's', video: v, budgets: { edit: -1 } }), /between 0 and/);
+    assert.throws(() => createJob({ script: 's', video: v, budgets: { evil: 1 } }), /unknown budget/);
+    assert.throws(() => createJob({ script: 5, video: v }), /script is required/);
+    assert.throws(() => createJob({ script: 's', video: '/etc/hosts' }), /must be one of/);
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+});
+
+test('createJob honours valid budget overrides but keeps other defaults', () => {
+  const { d, v } = tmpVideo(); const id = `t-${Date.now()}`;
+  const j = createJob({ script: 's', video: v, jobId: id, budgets: { edit: 0.25 } });
+  try {
+    assert.equal(j.state.budgets.edit, 0.25);
+    assert.equal(j.state.budgets.direction, config.budgets.direction);
+    assert.equal(j.state.status, 'queued');
+  } finally { fs.rmSync(j.dir, { recursive: true, force: true }); fs.rmSync(d, { recursive: true, force: true }); }
+});
+
+test('budgets by quality come from config', () => {
+  const { d, v } = tmpVideo();
+  const a = createJob({ script: 's', video: v, quality: 'high', jobId: `th-${Date.now()}` });
+  const b = createJob({ script: 's', video: v, quality: 'fast', jobId: `tf-${Date.now()}` });
+  try { assert.equal(a.state.budgets.edit, config.budgets.editHigh); assert.equal(b.state.budgets.edit, config.budgets.editFast); }
+  finally { for (const j of [a, b]) fs.rmSync(j.dir, { recursive: true, force: true }); fs.rmSync(d, { recursive: true, force: true }); }
+});
+
+test('runJob/startJob refuse unknown steps; resumeJob refuses bad ids, missing jobs', async () => {
+  const { d, v } = tmpVideo();
+  const j = createJob({ script: 's', video: v, jobId: `ts-${Date.now()}` });
+  try {
+    await assert.rejects(() => runJob(j, { from: 'nope' }), /unknown step/);
+    assert.throws(() => startJob(j, { from: 'nope' }), /unknown step/);
+    assert.throws(() => resumeJob('../x'), /invalid job id/);
+    assert.throws(() => resumeJob('does-not-exist-123'), /no such job/);
+    assert.throws(() => resumeJob(j.id), /already queued/, 'a queued job cannot be resumed twice');
+    assert.equal(getJob('../../etc'), null);
+  } finally { fs.rmSync(j.dir, { recursive: true, force: true }); fs.rmSync(d, { recursive: true, force: true }); }
+});
+
+test('a job cancelled before it starts never runs a step', async () => {
+  const { d, v } = tmpVideo();
+  const j = createJob({ script: 's', video: v, jobId: `tc-${Date.now()}` });
+  try {
+    j.abort.abort();
+    await runJob(j);
+    assert.equal(j.state.status, 'cancelled');
+    assert.ok(j.state.steps.every((s) => s.status === 'pending'));
+  } finally { fs.rmSync(j.dir, { recursive: true, force: true }); fs.rmSync(d, { recursive: true, force: true }); }
+});

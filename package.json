@@ -6,7 +6,7 @@
   "description": "Script + video in, edited reel out. Opus plans, Sonnet builds Remotion, Sonnet/Haiku drives the Edits app.",
   "scripts": {
     "start": "node server/index.mjs",
-    "test": "node --test test/",
+    "test": "node --test \"test/*.test.mjs\"",
     "setup": "cd remotion && npm install && cp -n src/Scenes.default.tsx src/Scenes.tsx"
   },
   "engines": {

@@ -2,17 +2,19 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { fileURLToPath } from 'node:url';
-import { runClaude, MODELS, writeJson } from './claude.mjs';
+import { config } from './config.mjs';
+import { createQueue } from './queue.mjs';
+import { isSafeId, validateVideoPath } from './security.mjs';
+import { runClaude, writeJson } from './claude.mjs';
 import * as P from './prompts.mjs';
 import { EDITS_URL, editsAuthHeaders } from './edits-mcp.mjs';
 import { applyGuardrails } from './guardrails.mjs';
 import { transcribe, planCuts, tighten, sentences, buildEdl, probe as probeVideo } from './media.mjs';
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const REMOTION = path.join(ROOT, 'remotion');
-const JOBS = path.join(ROOT, 'jobs');
-const metapilotMcp = () => JSON.stringify({ mcpServers: { 'metapilot-native': { type: 'http', url: EDITS_URL, headers: editsAuthHeaders() } } });
+const REMOTION = config.remotionDir;
+const JOBS = config.jobsDir;
+const editsMcpServers = () => ({ [config.editsServer]: { type: 'http', url: EDITS_URL, headers: editsAuthHeaders() } });
+const queue = createQueue();
 
 export const bus = new EventEmitter();
 const jobs = new Map();
@@ -21,11 +23,11 @@ export const STEP_DEFS = (q) => [
   { key: 'probe', title: 'Probe video', model: 'local (ffprobe)' },
   { key: 'transcribe', title: 'Word-level transcript', model: 'local (Edits captions model)' },
   { key: 'tighten', title: 'Cut dead air → tight.mp4', model: 'local (ffmpeg)' },
-  { key: 'direction', title: 'Creative direction: cards, zooms, captions, music, SFX', model: MODELS.opus },
+  { key: 'direction', title: 'Creative direction: cards, zooms, captions, music, SFX', model: config.models.director },
   { key: 'resolve', title: 'Resolve anchors → exact timestamps (EDL)', model: 'local' },
-  { key: 'codegen', title: 'Generate Remotion infographics', model: MODELS.sonnet },
+  { key: 'codegen', title: 'Generate Remotion infographics', model: config.models.coder },
   { key: 'render', title: 'Render infographics (Remotion)', model: 'local (Remotion)' },
-  { key: 'edit', title: 'Execute EDL in Edits app', model: q === 'high' ? MODELS.sonnet : MODELS.haiku },
+  { key: 'edit', title: 'Execute EDL in Edits app', model: q === 'high' ? config.models.editorHigh : config.models.editorFast },
   { key: 'verify', title: 'Verify export', model: 'local (ffprobe)' },
 ];
 
@@ -37,18 +39,27 @@ export function listJobs() {
     .map((d) => JSON.parse(fs.readFileSync(path.join(JOBS, d, 'state.json'), 'utf8')))
     .sort((a, b) => b.createdAt - a.createdAt);
 }
-export const getJob = (id) => jobs.get(id)?.state ?? (fs.existsSync(path.join(JOBS, id, 'state.json')) ? JSON.parse(fs.readFileSync(path.join(JOBS, id, 'state.json'), 'utf8')) : null);
+export const getJob = (id) => !isSafeId(id) ? null : jobs.get(id)?.state ?? (fs.existsSync(path.join(JOBS, id, 'state.json')) ? JSON.parse(fs.readFileSync(path.join(JOBS, id, 'state.json'), 'utf8')) : null);
 
+const BUDGET_KEYS = ['direction', 'codegen', 'edit'];
 export function createJob({ script, video, quality = 'high', budgets = {}, jobId, dryRun = false }) {
-  if (!script?.trim()) throw new Error('script is required');
-  if (!video || !fs.existsSync(video)) throw new Error(`video not found: ${video}`);
+  if (typeof script !== 'string' || !script.trim()) throw new Error('script is required');
+  if (!['high', 'fast'].includes(quality)) throw new Error('quality must be "high" or "fast"');
+  video = validateVideoPath(video);
+  if (jobId !== undefined && !isSafeId(jobId)) throw new Error('invalid job id');
+  const caps = {};
+  for (const [k, v] of Object.entries(budgets ?? {})) {
+    if (!BUDGET_KEYS.includes(k)) throw new Error(`unknown budget: ${k}`);
+    if (!(Number(v) > 0 && Number(v) <= config.budgetCeiling)) throw new Error(`budget ${k} must be between 0 and ${config.budgetCeiling} USD`);
+    caps[k] = Number(v);
+  }
   const id = jobId || `job-${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)}`;
   const dir = path.join(JOBS, id);
   fs.mkdirSync(path.join(dir, 'clips'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'script.txt'), script);
   const state = {
     id, createdAt: Date.now(), status: 'queued', quality, dryRun: !!dryRun, video, script,
-    budgets: { direction: 1.0, codegen: 0.5, edit: quality === 'high' ? 3 : 1.5, ...budgets },
+    budgets: { direction: config.budgets.direction, codegen: config.budgets.codegen, edit: quality === 'high' ? config.budgets.editHigh : config.budgets.editFast, ...caps },
     steps: STEP_DEFS(quality).map((s) => ({ ...s, status: 'pending', log: [], cost: 0, tokens: { in: 0, out: 0 } })),
   };
   const job = { id, dir, state, abort: new AbortController() };
@@ -59,10 +70,30 @@ export function createJob({ script, video, quality = 'high', budgets = {}, jobId
 
 export function cancel(id) { jobs.get(id)?.abort.abort(); }
 
+/** Queue a job: strictly one at a time (one Edits app, one Remotion workspace). */
+export function startJob(job, opts = {}) {
+  if (!STEP_DEFS('high').some((x) => x.key === (opts.from ?? 'probe'))) throw new Error(`unknown step: ${opts.from}`);
+  job.state.status = 'queued'; save(job);
+  return queue.enqueue(() => runJob(job, opts));
+}
+
+export function resumeJob(id, from = 'probe') {
+  if (!isSafeId(id)) throw new Error('invalid job id');
+  const state = getJob(id);
+  if (!state) throw new Error('no such job');
+  if (state.status === 'running' || state.status === 'queued') throw new Error(`job is already ${state.status}`);
+  const job = { id, dir: path.join(JOBS, id), state, abort: new AbortController() };
+  jobs.set(id, job);
+  startJob(job, { from }).catch(() => {});
+  return job;
+}
+
 export async function runJob(job, { from = 'probe' } = {}) {
   const s = job.state;
+  const startIdx = s.steps.findIndex((x) => x.key === from);
+  if (startIdx < 0) throw new Error(`unknown step: ${from}`);
+  if (job.abort.signal.aborted) { s.status = 'cancelled'; save(job); return; }
   s.status = 'running'; save(job);
-  const startIdx = Math.max(0, s.steps.findIndex((x) => x.key === from));
   try {
     for (const step of s.steps.slice(startIdx)) {
       if (s.dryRun && (step.key === 'edit' || step.key === 'verify')) { step.status = 'skipped'; step.log = ['dry run — Edits step skipped']; save(job); continue; }
@@ -114,7 +145,7 @@ const STEPS = {
     const cuts = planCuts(words, job.state.duration);
     const library = fs.readFileSync(path.join(REMOTION, 'LIBRARY.md'), 'utf8').split('\n').filter((l) => l.startsWith('- `') || l.startsWith('Icons')).join('\n');
     const r = await runClaude({
-      model: MODELS.opus, system: P.DIRECTOR_SYSTEM, schema: P.DIRECTOR_SCHEMA, effort: 'medium',
+      model: config.models.director, system: P.DIRECTOR_SYSTEM, schema: P.DIRECTOR_SCHEMA, effort: 'medium',
       prompt: P.directorPrompt({ script: job.state.script, sentences: sentences(words, cuts.toOut), duration: cuts.total, library }),
       cwd: job.dir, budget: job.state.budgets.direction, onEvent: log, signal: job.abort.signal,
     });
@@ -145,7 +176,7 @@ const STEPS = {
     const cache = f(job, 'Scenes.tsx');
     if (fs.existsSync(cache)) { fs.copyFileSync(cache, scenesFile); log('♻️ Scenes.tsx cached — reusing'); return; }
     const r = await runClaude({
-      model: MODELS.sonnet, prompt: P.codegenPrompt({ jobId: job.id }), tools: 'Read,Write,Edit',
+      model: config.models.coder, prompt: P.codegenPrompt({ jobId: job.id }), tools: 'Read,Write,Edit',
       cwd: REMOTION, budget: job.state.budgets.codegen, onEvent: log, signal: job.abort.signal,
       allowed: `Read Write(src/Scenes.tsx) Edit(src/Scenes.tsx)`, effort: 'low',
     });
@@ -170,8 +201,8 @@ const STEPS = {
         if (attempt === 1) throw new Error('render failed after repair: ' + msg.slice(0, 300));
         log('⚠️ failed — one cheap Sonnet repair attempt');
         const r = await runClaude({
-          model: MODELS.sonnet, prompt: P.repairPrompt(msg), tools: 'Read,Edit', allowed: 'Read Edit(src/Scenes.tsx)',
-          cwd: REMOTION, budget: 0.3, onEvent: log, signal: job.abort.signal, effort: 'low',
+          model: config.models.coder, prompt: P.repairPrompt(msg), tools: 'Read,Edit', allowed: 'Read Edit(src/Scenes.tsx)',
+          cwd: REMOTION, budget: config.budgets.repair, onEvent: log, signal: job.abort.signal, effort: 'low',
         });
         total.cost += r.cost; total.tokens.in += r.tokens.in; total.tokens.out += r.tokens.out;
         fs.copyFileSync(scenesFile, f(job, 'Scenes.tsx'));
@@ -184,7 +215,7 @@ const STEPS = {
     const out = f(job, 'final.mp4');
     const r = await runClaude({
       model: step.model, system: P.editSystem, prompt: P.editPrompt({ tight: f(job, 'tight.mp4'), clipsDir: f(job, 'clips'), edl, out, quality: job.state.quality }),
-      mcpConfig: metapilotMcp(), allowed: 'mcp__metapilot-native', tools: '', cwd: job.dir,
+      mcpServers: editsMcpServers(), allowed: `mcp__${config.editsServer}`, tools: '', cwd: job.dir,
       budget: job.state.budgets.edit, onEvent: log, signal: job.abort.signal,
     });
     log(`↩ ${r.text.slice(0, 300)}`);
