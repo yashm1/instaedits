@@ -26,9 +26,12 @@ export function trackExpr(values, { variable = 'n', base = 0, digits = 3 } = {})
  * - overlay on a black canvas at y = track.y (the split shift), then the graphics on top
  * - the speaker stays in the camera's own pixel format (full-range BT.709) end to end — no colour matrix is applied to it
  */
-export function filterGraph({ track, duration, fps = 30, origin = { x: 0.5, y: 0.34 }, width = 1080, height = 1920, audioInput = 0 }) {
+export function filterGraph({ track, duration, fps = 30, origin = { x: 0.5, y: 0.34 }, scale = 1, audioInput = 0 }) {
+  // output at the camera's resolution: the 1080x1920 layout × scale (1440x2560 for a 1440-wide camera) — no downscale
+  const even = (n) => Math.round(n / 2) * 2;
+  const width = even(1080 * scale), height = even(1920 * scale);
   const z = trackExpr(track.map((t) => t.zoom), { variable: 'on', base: 1, digits: 4 });
-  const y = trackExpr(track.map((t) => t.y), { variable: 'n', base: 0, digits: 1 });
+  const y = trackExpr(track.map((t) => t.y * scale), { variable: 'n', base: 0, digits: 1 });
   return [
     `color=c=black:s=${width}x${height}:r=${fps}:d=${duration.toFixed(3)},format=yuvj420p[bg]`,
     `[0:v]fps=${fps},zoompan=z='${z}':x='(iw-iw/zoom)*${origin.x}':y='(ih-ih/zoom)*${origin.y}':d=1:s=${width}x${height}:fps=${fps},format=yuvj420p[spk]`,
@@ -43,10 +46,10 @@ export function filterGraph({ track, duration, fps = 30, origin = { x: 0.5, y: 0
 export function compositeArgs({ tight, overlay, graphFile, out, audio = null, hq = false }) {
   return ['-y', '-loglevel', 'error', '-i', tight, '-i', overlay, ...(audio ? ['-i', audio] : []), '-filter_complex_script', graphFile, '-map', '[v]', '-map', '[a]',
     // preset medium: measured 1.7× faster than slow at the same CRF, ~1% larger file
-    // hq ("start fresh"): CRF 12 + slow, visibly cleaner gradients for a few more MB and ~1.7× the encode time
-    '-c:v', 'libx264', '-crf', hq ? '12' : '14', '-preset', hq ? 'slow' : 'medium', '-pix_fmt', 'yuvj420p',
+    // CRF 12 (visually lossless at native resolution); hq ("start fresh") CRF 10 + slow
+    '-c:v', 'libx264', '-crf', hq ? '10' : '12', '-preset', hq ? 'slow' : 'medium', '-pix_fmt', 'yuvj420p',
     '-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709', '-color_range', 'pc',
-    '-c:a', 'aac', '-b:a', '256k', '-movflags', '+faststart', out];
+    '-c:a', 'aac', '-b:a', '320k', '-movflags', '+faststart', out];
 }
 
 export function writeGraph(dir, opts) {

@@ -6,7 +6,7 @@ import { SFX, MUSIC_QUERIES, SCENE_KINDS } from './catalog.mjs';
 export const DIRECTOR_SYSTEM = `You are the director + editor-in-chief of a premium tech education channel (system design HLD/LLD, AI, dev tools). Output must feel hand-crafted by a top 1% editor — never templated, never "AI slop".
 You get the speech as numbered sentences on the already-silence-tightened timeline. FIRST understand what the video is about and what the viewer must walk away with; then plan the visuals. Code executes your plan literally, so be exact and decisive.
 
-LAYOUT (fixed): while a card is on screen the frame is SPLIT — the card fills the TOP HALF (1080x960), the speaker stays visible in the bottom half. With no card the speaker is full-frame. Cards therefore never hide the speaker, so use them generously.
+LAYOUT: by default a card SPLITS the frame — it fills the TOP HALF (1080x960) and the speaker stays visible below. With no card the speaker is full-frame. Set layout 'full' on 1-2 cards per video (never more) for the BIG moments where the visual deserves the whole screen: a multi-step diagram (Flow/Steps/Fanout with 4 nodes), the payoff number (Stat), a real screen worth reading (Screen/Site), or the call to action. A full card hides the speaker while the voice continues, so keep it 2.5-4.5s and return to the speaker after it.
 
 RETENTION DOCTRINE (numbers are limits)
 - NOVELTY: every card shows something the speaker is NOT showing by talking — the real product/screen, a diagram of the mechanism, a number, a contrast. A card that merely restates the sentence is slop.
@@ -45,6 +45,7 @@ export const DIRECTOR_SCHEMA = {
           word: { type: 'string', description: 'optional: the spoken word in that sentence (verbatim, before "||") at which the card should appear — the moment its subject is named' },
           dur: { type: 'number' },
           kind: { enum: SCENE_KINDS },
+          layout: { enum: ['split', 'full'], description: "'split' (default): card on top, speaker below. 'full': the card takes the WHOLE screen (voice continues) — 1-2 per video" },
           props: { type: 'object', description: 'Props for the kind — see library' },
         },
       },

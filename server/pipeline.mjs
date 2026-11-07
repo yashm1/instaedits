@@ -21,7 +21,7 @@ import { writeGraph, compositeArgs } from './composite.mjs';
 const REMOTION = config.remotionDir;
 // Bump when HOW a step produces its output changes, so old cache entries are not reused.
 const AUDIO_RECIPE = 'edits-audio-v1 voice(0.35,0.5) export(720p,2M)';
-const COMPOSITE_RECIPE = 'x264-crf14-medium yuvj420p bt709 loudnorm-14';
+const COMPOSITE_RECIPE = 'x264-crf12-medium native-res yuvj420p bt709 loudnorm-14 aac320';
 const JOBS = config.jobsDir;
 const queue = createQueue();
 
@@ -236,7 +236,7 @@ const STEPS = {
     const cuts = planCuts(words, job.state.duration);
     writeJson(f(job, 'cuts.json'), cuts.segs);
     job.state.tight = { duration: +cuts.total.toFixed(2), saved: +cuts.saved.toFixed(2) };
-    const key = keyOf('tight', fileKey(job.state.video), cuts.segs);
+    const key = keyOf('tight', fileKey(job.state.video), cuts.segs, 'crf8-veryfast');
     if (fromCache(job, () => restoreFile('tight', key, '.mp4', f(job, 'tight.mp4')))) { log('♻️ same video + same cuts — tight.mp4 reused'); return; }
     await tighten(job.state.video, cuts.segs, f(job, 'tight.mp4'), log, job.abort.signal);
     storeFile('tight', key, '.mp4', f(job, 'tight.mp4'));
@@ -411,7 +411,7 @@ const STEPS = {
     if (fromCache(job, () => restoreFile('final', key, '.mp4', out))) { log(`♻️ identical inputs — final reel reused → ${out}`); return; }
     const props = JSON.parse(fs.readFileSync(f(job, 'reel.json'), 'utf8'));
     log(`compositing your original footage under the graphics (colour untouched)${audio ? ', audio from Edits' : ''}…`);
-    const graphFile = writeGraph(job.dir, { track, duration: props.duration, audioInput: audio ? 2 : 0 });
+    const graphFile = writeGraph(job.dir, { track, duration: props.duration, audioInput: audio ? 2 : 0, scale: props.scale ?? 1 });
     if (hq) log('fresh take: high-quality encode (CRF 12, slow)');
     await sh('ffmpeg', compositeArgs({ tight: f(job, 'tight.mp4'), overlay: f(job, 'overlay.mov'), graphFile, out, audio, hq }), job.dir, () => {}, job.abort.signal);
     storeFile('final', key, '.mp4', out);
@@ -474,8 +474,15 @@ function reelProps(job, edl) {
     const [w, h] = pngSize(f(job, file));
     screens[s.props.shot] = { file, w, h, focus: SCREENS[s.props.shot]?.focus };
   }
-  return { video: 'tight.mp4', duration: edl.duration, scenes: edl.scenes.map(({ id, start, dur, kind, props }) => ({ id, start, dur, kind, props })), zooms: edl.zooms, assets, screens };
+  return { video: 'tight.mp4', duration: edl.duration, scale: outputScale(job.state.resolution), scenes: edl.scenes.map(({ id, start, dur, kind, props, layout }) => ({ id, start, dur, kind, props, ...(layout ? { layout } : {}) })), zooms: edl.zooms, assets, screens };
 }
+/** Render/composite scale so the output matches the camera: 1440-wide 9:16 → 4/3 (1440x2560). Never upscale; cap at 2. */
+export function outputScale(resolution) {
+  const [w, h] = String(resolution ?? '').split('x').map(Number);
+  if (!(w >= 1080 && h >= 1920) || Math.abs(w / h - 9 / 16) > 0.02) return 1;
+  return Math.min(2, w / 1080); // exact ratio: 1080·s and 1920·s must stay whole pixels (1.3333 gives 2559.94 → render error)
+}
+
 /** Width/height from a PNG header (no dependency). */
 export function pngSize(file) {
   const b = fs.readFileSync(file).subarray(0, 24);
@@ -489,6 +496,7 @@ function sh(cmd, args, cwd, onLine, signal) {
     p.stdout.on('data', (d) => { buf += d; let i; while ((i = buf.indexOf('\n')) >= 0) { onLine(buf.slice(0, i)); buf = buf.slice(i + 1); } });
     p.stderr.on('data', (d) => (err += d));
     p.on('error', reject);
-    p.on('close', (c) => (c === 0 ? resolve() : reject(Object.assign(new Error(`${cmd} exited ${c}`), { stderr: err.slice(-1500) }))));
+    // the tool's own last error line goes into the message, so a failed step says WHY (not just "exited 1")
+    p.on('close', (c) => (c === 0 ? resolve() : reject(Object.assign(new Error(`${cmd} exited ${c}${err.trim() ? `: ${(err.trim().split('\n').reverse().find((l) => /error/i.test(l)) ?? err.trim().split('\n').pop()).trim().slice(0, 240)}` : ''}`), { stderr: err.slice(-1500) }))));
   });
 }

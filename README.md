@@ -75,7 +75,7 @@ GitHub repos are shown as the **actual repo page** (a fresh screenshot of `githu
 
 ## What you get
 
-Whenever a card shows, the frame **splits**: the card fills the top half, you stay visible in the bottom half (animated open/close, a thin ink seam). Between cards you're full-frame, with occasional punch-ins.
+Whenever a card shows, the frame **splits**: the card fills the top half, you stay visible in the bottom half (animated open/close, a thin ink seam). For one or two big moments per video — a multi-step diagram, the payoff number, a real screen worth reading, the call to action — a card goes **full screen** (your voice continues, captions turn to ink on paper). Between cards you're full-frame, with occasional punch-ins.
 
 **The look is editorial, not "AI":** warm paper, ink, and one burnt-orange accent — no gradient backgrounds, no glows, no neon (a test enforces it). And **nothing is text-only**: icons draw themselves on, a highlighter sweeps the key word, checklists tick, numbers fill a ring, data packets travel through diagrams, and on real screenshots a cursor glides to the thing being talked about and clicks.
 
@@ -96,7 +96,7 @@ Whenever a card shows, the frame **splits**: the card fills the top half, you st
 
 ![The card library: Flow, Code, Steps, Chart, Hook](docs/assets/cards.png)
 
-Plus: **punch-in zooms**, **Hinglish captions** in 2–3-word lines (on the seam while a card shows, so your face stays clear), **ducked licensed music**, **SFX on card entries**, **voice loudness at −14 LUFS**, **dead-air removal** (pauses > 0.4 s) and a **1080×1920, 20 Mbit/s export**. No colour grade, no colour conversion: your footage never passes through the browser renderer, and QA fails any export whose colour drifts more than 2.5 levels from your original.
+Plus: **punch-in zooms**, **Hinglish captions** in 2–3-word lines (on the seam while a card shows, so your face stays clear), **ducked licensed music**, **SFX on card entries**, **voice loudness at −14 LUFS**, **dead-air removal** (pauses > 0.4 s) and an export at **your camera's own resolution** (1440×2560 from a 1440-wide phone clip — never downscaled; graphics are rendered at that resolution too), visually lossless (x264 CRF 12, AAC 320k). No colour grade, no colour conversion: your footage never passes through the browser renderer, and QA fails any export whose colour drifts more than 2.5 levels from your original.
 
 ## How it works
 

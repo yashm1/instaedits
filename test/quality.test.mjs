@@ -171,11 +171,12 @@ test('linesFromWords: lines break at punctuation and pauses, ≤3 words, balance
   for (const l of L) for (let j = 0; j + 1 < l.words.length; j++) assert.equal(l.words[j].end, l.words[j + 1].start, 'the highlight never blinks off mid-line');
 });
 
-test('compositeArgs hq (fresh take): CRF 12 + slow; default CRF 14 + medium', () => {
+test('compositeArgs: CRF 12 + medium by default; hq (fresh take) CRF 10 + slow; AAC 320k', () => {
   const v = (a, k) => a[a.indexOf(k) + 1];
   const n = compositeArgs({ tight: 't', overlay: 'o', graphFile: 'g', out: 'x' }), h = compositeArgs({ tight: 't', overlay: 'o', graphFile: 'g', out: 'x', hq: true });
-  assert.deepEqual([v(n, '-crf'), v(n, '-preset')], ['14', 'medium']);
-  assert.deepEqual([v(h, '-crf'), v(h, '-preset')], ['12', 'slow']);
+  assert.deepEqual([v(n, '-crf'), v(n, '-preset')], ['12', 'medium']);
+  assert.deepEqual([v(h, '-crf'), v(h, '-preset')], ['10', 'slow']);
+  assert.equal(v(n, '-b:a'), '320k');
   assert.equal(v(h, '-pix_fmt'), 'yuvj420p', 'colour description unchanged');
 });
 
@@ -186,4 +187,11 @@ test('isEditorScreen: the Edits editor passes; the projects grid (a wall of thum
   assert.equal(isEditorScreen(o('Media', 'Audio', 'Text', 'Captions', 'Export', '00:24.24')), true);
   assert.equal(isEditorScreen(o('Projects', 'New project 12', 'Today · 57 MB · 00:24', 'New project')), false);
   assert.equal(isEditorScreen(o('Settings', 'Automation')), false);
+});
+
+test('filterGraph at native resolution: canvas = 1080x1920 × scale, speaker shift scaled with it', () => {
+  const g = filterGraph({ track: [{ y: 0, zoom: 1 }, { y: 672, zoom: 1 }], duration: 2, scale: 4 / 3 });
+  assert.match(g, /color=c=black:s=1440x2560/); assert.match(g, /zoompan=[^;]*s=1440x2560/);
+  assert.match(g, /eq\(n,1\)\*896/, '672 px × 4/3');
+  assert.match(filterGraph({ track: [{ y: 0, zoom: 1 }], duration: 2 }), /s=1080x1920/);
 });
