@@ -43,9 +43,9 @@ test('every relative link/image in the README resolves to a real file', () => {
 
 test('README has the sections a newcomer needs, and is honest about status', () => {
   const md = read('README.md');
-  for (const h of ['## Prerequisites', '## Quick start', '## Configuration', '## Status & limitations', '## Security', '## FAQ', '## Third-party licences', '## License'])
+  for (const h of ['## Why', '## Quick start', '## What you get', '## How it works', '## A real run, end to end', '## Configuration', '## Troubleshooting', '## Status & roadmap', '## FAQ', '## Third-party licences', '## Contributing & security', '## License'])
     assert.ok(md.includes(h), h);
-  assert.match(md, /status: beta/); assert.match(md, /Edits app only, macOS only/);
+  assert.match(md, /status: beta/); assert.match(md, /macOS \+ Edits only/);
 });
 
 test('no secrets, tokens or personal absolute paths in tracked files', () => {
@@ -66,6 +66,36 @@ test('local-only and generated files are never tracked', () => {
   for (const p of ['.env.local', 'jobs/', 'node_modules/', 'remotion/src/Scenes.tsx']) assert.ok(ig.includes(p), p);
 });
 
-test('images are small enough for a repo (<1 MB each)', () => {
-  for (const f of fs.readdirSync('docs/assets')) assert.ok(fs.statSync(path.join('docs/assets', f)).size < 1_000_000, f);
+test('images stay repo-friendly: <2.5 MB each, <6 MB total', () => {
+  let total = 0;
+  for (const f of fs.readdirSync('docs/assets')) { const n = fs.statSync(path.join('docs/assets', f)).size; total += n; assert.ok(n < 2_500_000, f); }
+  assert.ok(total < 6_000_000, `docs/assets is ${total} bytes`);
+});
+
+const slug = (h) => h.toLowerCase().replace(/[^\p{L}\p{N}\- ]/gu, '').trim().replace(/ /g, '-');
+test('every in-page README anchor points at a real heading (GitHub slug rules)', () => {
+  const md = read('README.md');
+  const slugs = new Set([...md.matchAll(/^#{1,4} (.+)$/gm)].map((m) => slug(m[1])));
+  const anchors = [...md.matchAll(/\]\(#([^)]+)\)/g)].map((m) => m[1]);
+  assert.ok(anchors.length >= 6);
+  for (const a of anchors) assert.ok(slugs.has(a), `broken anchor #${a}`);
+});
+
+test('README stays in sync with the code it documents', async () => {
+  const md = read('README.md');
+  const { config } = await import('../server/config.mjs');
+  const { SCENE_KINDS } = await import('../server/catalog.mjs');
+  for (const m of new Set(Object.values(config.models))) assert.ok(md.includes(m), `model ${m} missing from README`);
+  assert.ok(md.includes(String(config.server.port)));
+  for (const k of SCENE_KINDS) assert.ok(new RegExp(`\\b${k}\\b`).test(md), `card ${k} not mentioned in README`);
+  for (const script of ['setup', 'start', 'test']) assert.ok(pkg.scripts[script], `npm script ${script}`);
+  assert.match(md, /npm run setup/); assert.match(md, /npm start/);
+  assert.ok(md.includes(`direction $${config.budgets.direction}`));
+  assert.ok(md.includes(`$${config.budgets.editFast}`) && md.includes(`$${config.budgets.editHigh}`));
+});
+
+test('the rules table does not overclaim: prompt-only rules are labelled as such', () => {
+  const md = read('README.md');
+  assert.match(md, /Instruction to the editor model/);
+  assert.match(md, /three-of-a-kind in a row is \*flagged\*, not fixed/);
 });
