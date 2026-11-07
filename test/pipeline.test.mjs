@@ -8,15 +8,15 @@ import { MODELS } from '../server/claude.mjs';
 import { SCENE_KINDS } from '../server/catalog.mjs';
 
 test('step order is fixed and creative decisions precede execution', () => {
-  assert.deepEqual(STEP_DEFS('high').map((s) => s.key), ['probe', 'transcribe', 'tighten', 'translate', 'direction', 'assets', 'resolve', 'edit', 'render', 'verify']);
+  assert.deepEqual(STEP_DEFS('high').map((s) => s.key), ['probe', 'transcribe', 'tighten', 'translate', 'direction', 'assets', 'resolve', 'captions', 'audio', 'graphics', 'composite', 'verify']);
 });
 
 test('models: Opus directs; rendering is local; the Edits edit is plain tool calls (a model only writes Hinglish)', () => {
   const m = (q, k) => STEP_DEFS(q).find((s) => s.key === k).model;
   assert.equal(m('high', 'direction'), MODELS.opus);
-  assert.match(m('high', 'render'), /^local/);
-  assert.match(m('high', 'edit'), /^local \(Edits tool calls\)/);
-  assert.ok(m('high', 'edit').includes(config.models.captions));
+  assert.match(m('high', 'graphics'), /^local/); assert.match(m('high', 'composite'), /^local/);
+  assert.equal(m('high', 'audio'), 'local (Edits tool calls)', 'the Edits step uses no model at all now');
+  assert.equal(m('high', 'captions'), config.models.captions);
   assert.ok(m('high', 'verify').includes(config.models.reviewer), 'full QA: a model watches the export');
   assert.equal(m('fast', 'verify'), 'local (ffmpeg)');
 });
@@ -37,7 +37,7 @@ test('createJob sets budgets by quality and creates the job dir', () => {
   try {
     assert.equal(j.state.budgets.captions, config.budgets.captions);
     assert.ok(fs.existsSync(path.join(j.dir, 'state.json')));
-    assert.equal(j.state.steps.length, 10);
+    assert.equal(j.state.steps.length, 12);
     assert.deepEqual(j.state.terms, config.defaultTerms, 'no Terms → the default glossary');
   } finally { fs.rmSync(j.dir, { recursive: true, force: true }); fs.rmSync(tmp, { recursive: true, force: true }); }
 });
@@ -276,4 +276,12 @@ test('resumeJob migrates a legacy job so the new step actually runs', () => {
     assert.ok(resumed.state.steps.some((x) => x.key === 'assets'));
     assert.deepEqual(resumed.state.steps.map((x) => x.key), STEP_DEFS('high').map((x) => x.key));
   } finally { fs.rmSync(j.dir, { recursive: true, force: true }); fs.rmSync(d, { recursive: true, force: true }); }
+});
+
+test('audio (Edits) and graphics (Remotion) are one parallel group — and nothing else is', () => {
+  const g = STEP_DEFS('high').filter((d) => d.group).map((d) => [d.key, d.group]);
+  assert.deepEqual(g, [['audio', 'produce'], ['graphics', 'produce']]);
+  const keys = STEP_DEFS('high').map((d) => d.key);
+  assert.ok(keys.indexOf('captions') < keys.indexOf('graphics'), 'graphics need the caption lines');
+  assert.ok(keys.indexOf('composite') > keys.indexOf('graphics') && keys.indexOf('composite') > keys.indexOf('audio'));
 });

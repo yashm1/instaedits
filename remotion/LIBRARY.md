@@ -1,7 +1,7 @@
 # Card library (rendered by remotion/src/Reel.tsx from the EDL — no code generation)
 Cards render in the TOP HALF of a split screen (1080x960; the speaker stays visible below). Content auto-fits the panel. Props are plain JSON.
 Icons (use in `icon`): client, server, db, queue, cache, lb, cloud, lock, ai, user, api
-- `Hook {text, hot?:string[], sub?, tag?}` — big kinetic statement in the upper third; `hot` words glow (1-2 words). Hook / payoff / mid-video micro-hook (≤8 words; opening hook ≤4 words)
+- `Hook {text, hot?:string[], sub?, tag?, shot?}` — big kinetic statement; `hot` words glow (1-2 words). Hook / payoff / mid-video micro-hook (≤8 words; opening hook ≤4 words). The OPENING hook is the first frame and the thumbnail: hot words sit on a solid accent block, and `shot` (a REAL SCREENSHOTS key) puts that real screen behind it as proof
 - `Flow {title?, nodes:[{label, note?, icon?}], highlight? (node index or its label), tag?}` — architecture flow, left→right in the panel, with moving data packets (max 4 nodes)
 - `Fanout {title?, from:{label,icon?}, to:[{label,icon?}], tag?}` — 1→N (load balancer → servers, topic → consumers), 2-4 targets
 - `Steps {title?, steps:[{label, note?}], tag?}` — numbered lifecycle, max 4

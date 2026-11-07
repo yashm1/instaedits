@@ -60,7 +60,7 @@ export const Reel: React.FC<ReelProps> = ({video, scenes, zooms, overlayOnly, ca
             const from = Math.round(s.start * fps), dur = Math.max(1, Math.round(s.dur * fps));
             return (
               <Sequence key={s.id} from={from} durationInFrames={dur} layout="none">
-                <CardFade dur={dur}><Guard><C {...s.props} /></Guard></CardFade>
+                <CardFade dur={dur} noFadeIn={from === 0}><Guard><C {...s.props} /></Guard></CardFade>
               </Sequence>
             );
           })}
@@ -74,9 +74,9 @@ export const Reel: React.FC<ReelProps> = ({video, scenes, zooms, overlayOnly, ca
 };
 
 /** Card-to-card handoff inside an open split: quick fade + small lift, so consecutive cards don't hard-cut. */
-const CardFade: React.FC<{children: React.ReactNode; dur: number}> = ({children, dur}) => {
+const CardFade: React.FC<{children: React.ReactNode; dur: number; noFadeIn?: boolean}> = ({children, dur, noFadeIn}) => {
   const f = useCurrentFrame();
-  const o = interpolate(f, [0, 6, dur - 6, dur], [0, 1, 1, 0], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'});
+  const o = interpolate(f, [0, 6, dur - 6, dur], [noFadeIn ? 1 : 0, 1, 1, 0], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'});
   return <AbsoluteFill style={{opacity: o, transform: `translateY(${(1 - o) * 18}px)`}}>{children}</AbsoluteFill>;
 };
 

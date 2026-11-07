@@ -53,6 +53,8 @@ export function applyGuardrails(input, { totalSeconds, scriptWordCount, screens 
     else s.props.url = new URL(s.props.url).href; // canonical form = the key the fetched assets are stored under
     refs++; return true;
   });
+  // a Hook backdrop must be a real captured screenshot — otherwise drop just the backdrop, keep the hook
+  for (const s of d.scenes) if (s.kind === 'Hook' && s.props?.shot && !screens[s.props.shot]) { notes.push(`hook ${s.id}: backdrop "${s.props.shot}" not available — removed`); delete s.props.shot; }
   // Screen cards: only real captured shots; required props per kind (a malformed card would render blank)
   d.scenes = d.scenes.filter((s) => {
     const why = s.kind === 'Screen' && !screens[s.props?.shot] ? `screenshot "${s.props?.shot}" is not available` : missingProps(s);

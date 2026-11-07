@@ -65,11 +65,13 @@ const direction = (over = {}) => ({
   music: { query: 'minimal tech' }, grade: { note: 'x' }, ...over,
 });
 
-test('buildEdl: hook starts at 0.1s, unresolvable anchors are dropped, scenes never overlap', () => {
+test('buildEdl: the opening hook owns FRAME 0 (flagged opening), unresolvable anchors are dropped, scenes never overlap', () => {
   const c = planCuts(words, 11); const logs = [];
   const e = buildEdl(direction(), words, c, (m) => logs.push(m));
   assert.equal(e.scenes[0].kind, 'Hook');
-  assert.equal(e.scenes[0].start, 0.1);
+  assert.equal(e.scenes[0].start, 0, 'frame 0 = what a scroller sees first and the default thumbnail');
+  assert.equal(e.scenes[0].props.opening, true);
+  assert.ok(!e.scenes.slice(1).some((s) => s.props?.opening), 'only the first card is the opening hook');
   assert.ok(logs.some((l) => /nonexistent/.test(l)), 'dropped scene is logged');
   assert.equal(e.scenes.length, 3);
   for (let i = 1; i < e.scenes.length; i++) assert.ok(e.scenes[i].start >= e.scenes[i - 1].start + e.scenes[i - 1].dur, 'no overlap');
@@ -149,7 +151,7 @@ test('buildEdl resolves "#N" anchors to the start of that sentence — language-
   const e = buildEdl(dir2([{ anchor: '#1', kind: 'Hook' }, { anchor: '#3' }, { anchor: '#5' }]), HI, c, () => {}, sents, 'hi');
   assert.equal(e.language, 'hi');
   assert.equal(e.scenes.length, 3);
-  assert.equal(e.scenes[0].start, 0.1, 'opening Hook still lands at 0.1s');
+  assert.equal(e.scenes[0].start, 0, 'opening Hook lands on frame 0');
   assert.ok(Math.abs(e.scenes[1].start - (sents[2].t - 0.2)) < 0.011, 'leads by 0.2 s so the split is open as the words are said');
   assert.ok(Math.abs(e.scenes[2].start - Math.min(sents[4].t - 0.2, c.total - 2)) < 0.011, 'the last card may start earlier to get its 2 s');
 });

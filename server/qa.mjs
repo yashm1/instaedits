@@ -57,27 +57,29 @@ export function judge({ finalDur, reelDur, satFinal, satReel, cards, fidelity = 
  */
 export async function checkExport({ final, overlay = null, scenes, dir, original, track = null }) {
   const qd = path.join(dir, 'qa'); fs.rmSync(qd, { recursive: true, force: true }); fs.mkdirSync(qd, { recursive: true });
-  const [finalDur, reelDur] = [await duration(final), await duration(original)];
+  const [finalDur, reelDur] = await Promise.all([duration(final), duration(original)]);
   // speaker area (bottom strip, below the captions) — present in both layouts
   const probes = [0.25, 0.5, 0.75].map((k) => +(reelDur * k).toFixed(2));
   const strip = 'scale=1080:1920,crop=1080:380:0:1500';
-  let sf = 0, sr = 0;
-  for (const [i, t] of probes.entries()) {
-    await frame(final, t, path.join(qd, `sf${i}.png`), strip); await frame(original, t, path.join(qd, `sr${i}.png`), strip);
-    sf += await saturation(path.join(qd, `sf${i}.png`)); sr += await saturation(path.join(qd, `sr${i}.png`));
-  }
-  const cards = [], frames = [];
+  const sats = await Promise.all(probes.flatMap((t, i) => [[final, 'sf'], [original, 'sr']].map(async ([file, p]) => {
+    const png = path.join(qd, `${p}${i}.png`); await frame(file, t, png, strip); return [p, await saturation(png)];
+  })));
+  const sf = sats.filter(([p]) => p === 'sf').reduce((a, [, v]) => a + v, 0), sr = sats.filter(([p]) => p === 'sr').reduce((a, [, v]) => a + v, 0);
   // the card panel region vs the graphics layer flattened on black: proves the composite put each card at its time
   const crop = 'crop=iw:ih*0.44:0:0,scale=360:-1';
-  for (const s of scenes) {
-    const t = +(s.start + Math.min(s.dur * 0.6, s.dur - 0.3)).toFixed(2);
-    const a = path.join(qd, `${s.id}-final.png`), b = path.join(qd, `${s.id}-gfx.png`);
-    await frame(final, t, a, crop);
+  // every card at its midpoint — plus the FIRST FRAME when the reel opens on the hook (the frame Instagram shows first)
+  const checks = scenes.map((s) => ({ id: s.id, kind: s.kind, t: +(s.start + Math.min(s.dur * 0.6, s.dur - 0.3)).toFixed(2), sheet: true }));
+  if (scenes[0]?.start === 0) checks.unshift({ id: 'first-frame', kind: scenes[0].kind, t: 0, sheet: false });
+  const results = await Promise.all(checks.map(async (c) => {
+    const a = path.join(qd, `${c.id}-final.png`), b = path.join(qd, `${c.id}-gfx.png`);
+    await frame(final, c.t, a, crop);
     // canvas derived from the overlay stream itself (frame-locked; a separate lavfi canvas starts a frame early → black)
-    if (overlay) await pexec('ffmpeg', ['-y', '-loglevel', 'error', '-ss', String(t), '-i', overlay, '-filter_complex', `[0]split[x][y];[y]format=yuv444p,drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[bg];[bg][x]overlay,${crop}`, '-frames:v', '1', b]);
-    cards.push({ id: s.id, kind: s.kind, t, similarity: overlay ? await ssim(a, b) : 1 });
-    const full = path.join(qd, `${s.id}.jpg`); await frame(final, t, full, 'scale=540:-1'); frames.push({ t, file: full, label: `${s.id} ${s.kind}` }); // 540px: big enough to judge phone legibility fairly
-  }
+    if (overlay) await pexec('ffmpeg', ['-y', '-loglevel', 'error', '-ss', String(c.t), '-i', overlay, '-filter_complex', `[0]split[x][y];[y]format=yuv444p,drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[bg];[bg][x]overlay,${crop}`, '-frames:v', '1', b]);
+    const full = path.join(qd, `${c.id}.jpg`);
+    if (c.sheet) await frame(final, c.t, full, 'scale=540:-1'); // 540px: big enough to judge phone legibility fairly
+    return { card: { id: c.id, kind: c.kind, t: c.t, similarity: overlay ? await ssim(a, b) : 1 }, frame: c.sheet ? { t: c.t, file: full, label: `${c.id} ${c.kind}` } : null };
+  }));
+  const cards = results.map((r) => r.card), frames = results.map((r) => r.frame).filter(Boolean);
   if (frames.length === 1) fs.copyFileSync(frames[0].file, path.join(qd, 'contact.jpg'));
   else if (frames.length > 1) {
     const inputs = frames.flatMap((f) => ['-i', f.file]);
@@ -88,13 +90,11 @@ export async function checkExport({ final, overlay = null, scenes, dir, original
   if (original && track?.length) {
     const wins = cleanWindows(track);
     if (wins.length) {
-      let maxDrift = 0; const samples = [];
-      for (const w of wins) {
-        const [a, b] = [await meanRGB(final, w.t, w.d), await meanRGB(original, w.t, w.d)];
-        const drift = Math.max(...a.map((x, i) => Math.abs(x - b[i])));
-        samples.push({ t: w.t, final: a.map((x) => +x.toFixed(1)), original: b.map((x) => +x.toFixed(1)) });
-        maxDrift = Math.max(maxDrift, drift);
-      }
+      const samples = await Promise.all(wins.map(async (w) => {
+        const [a, b] = await Promise.all([meanRGB(final, w.t, w.d), meanRGB(original, w.t, w.d)]);
+        return { t: w.t, drift: Math.max(...a.map((x, i) => Math.abs(x - b[i]))), final: a.map((x) => +x.toFixed(1)), original: b.map((x) => +x.toFixed(1)) };
+      }));
+      const maxDrift = Math.max(...samples.map((x) => x.drift));
       fidelity = { maxDrift: +maxDrift.toFixed(2), samples };
     }
   }

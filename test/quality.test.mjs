@@ -158,3 +158,15 @@ test('filterGraph: audio comes from the Edits mix when given, trimmed to exactly
   const a = compositeArgs({ tight: 't', overlay: 'o', graphFile: 'g', out: 'x', audio: 'edits.mp4' });
   assert.deepEqual(a.slice(a.indexOf('-i'), a.indexOf('-filter_complex_script')), ['-i', 't', '-i', 'o', '-i', 'edits.mp4']);
 });
+
+import { linesFromWords } from '../server/captions.mjs';
+test('linesFromWords: lines break at punctuation and pauses, ≤3 words, balanced; lines hold until the next one', () => {
+  const W = (text, start, end) => ({ text, start, end });
+  const L = linesFromWords([W('ओ', 0.1, 0.3), W('भाई,', 0.3, 0.7), W('ये', 0.8, 1), W('पूरा', 1, 1.3), W('वीडियो', 1.3, 1.7), W('क्लॉड', 1.8, 2.1), W('ने', 2.1, 2.2), W('अब', 3.5, 3.8)]);
+  assert.ok(L.every((l) => l.words.length <= 3));
+  assert.equal(L[0].words.map((w) => w.text).join(' '), 'ओ भाई,', 'comma ends a phrase');
+  for (let i = 0; i + 1 < L.length; i++) assert.ok(L[i].end <= L[i + 1].start + 1e-9, 'no overlap');
+  const pause = L.find((l) => l.words[0].text === 'अब');
+  assert.ok(pause.start === 3.5 && L[L.indexOf(pause) - 1].end <= 2.8, 'a long pause ends the previous line ≤0.6 s after its last word');
+  for (const l of L) for (let j = 0; j + 1 < l.words.length; j++) assert.equal(l.words[j].end, l.words[j + 1].start, 'the highlight never blinks off mid-line');
+});

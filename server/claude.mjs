@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { config } from './config.mjs';
+import { keyOf, getJson, putJson } from './cache.mjs';
 
 // Roles → model ids live in config.mjs. Keys kept for readability at call sites.
 export const MODELS = { opus: config.models.director, sonnet: config.models.translator };
@@ -40,10 +41,20 @@ export function writeSecretJson(obj) {
   return { file, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
 }
 
-export async function runClaude({ prompt, cwd, onEvent, signal, mcpServers, ...opts }) {
+/**
+ * `cache: true` — for calls whose answer depends only on their inputs (no tools): an identical (model, system, prompt,
+ * schema, effort) is answered from the shared cache with zero tokens. Re-running a video must not re-pay for the same answer.
+ */
+export async function runClaude({ prompt, cwd, onEvent, signal, mcpServers, cache = false, ...opts }) {
+  const key = cache && !mcpServers && !opts.tools ? keyOf('claude', opts.model, opts.system ?? '', prompt, opts.schema ?? null, opts.effort ?? '') : null;
+  const hit = key ? getJson('llm', key) : null;
+  if (hit) { onEvent?.('♻️ same inputs as a previous run — answer reused (0 tokens)'); return { ...hit, cost: 0, tokens: { in: 0, out: 0 }, cached: true }; }
   const secret = mcpServers ? writeSecretJson({ mcpServers }) : null;
-  try { return await spawnClaude({ prompt, cwd, onEvent, signal, opts: { ...opts, ...(secret ? { mcpConfig: secret.file } : {}) } }); }
-  finally { secret?.cleanup(); }
+  try {
+    const r = await spawnClaude({ prompt, cwd, onEvent, signal, opts: { ...opts, ...(secret ? { mcpConfig: secret.file } : {}) } });
+    if (key) putJson('llm', key, { text: r.text, structured: r.structured });
+    return r;
+  } finally { secret?.cleanup(); }
 }
 
 function spawnClaude({ prompt, cwd, onEvent, signal, opts }) {

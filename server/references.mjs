@@ -6,6 +6,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { config } from './config.mjs';
 import { assertPublicHttpUrl } from './netguard.mjs';
+import { keyOf, getJson, putJson } from './cache.mjs';
 
 export const REF_KINDS = ['Repo', 'Site'];
 export const isRefKind = (k) => REF_KINDS.includes(k);
@@ -110,11 +111,17 @@ export async function gatherAssets({ scenes, jobDir, log = () => {}, deps = {} }
     accepted++;
     if (s.kind === 'Repo') {
       try {
-        assets.repos[ref] ??= await fetchRepo(ref, deps);
+        const rk = keyOf('repo', ref, Math.floor(Date.now() / 36e5)); // reuse for the hour
+        assets.repos[ref] ??= (!deps.fetchFn && getJson('refs', rk)) || putJson('refs', rk, await fetchRepo(ref, deps));
         status[s.id] = { ok: true, kind: 'Repo', ref, detail: `${assets.repos[ref].stars}★` };
         log(`✅ ${ref} · ${assets.repos[ref].stars}★`);
       } catch (e) { status[s.id] = { ok: false, kind: 'Repo', ref, reason: e.message }; log(`⚠️ ${ref}: ${e.message}`); }
-    } else { status[s.id] = { ok: null, kind: 'Site', ref }; sitesToShoot.push({ key: s.id, url: ref, name: s.props?.name }); }
+    } else {
+      const sk = keyOf('site', ref, String(s.props?.name ?? ''), Math.floor(Date.now() / 864e5)); // a page screenshot is reused for the day
+      const hit = !deps.capture && getJson('refs', sk);
+      if (hit) { assets.sites[ref] = hit; status[s.id] = { ok: true, kind: 'Site', ref, detail: `${hit.domain} (reused)` }; log(`♻️ ${hit.domain} screenshot reused`); continue; }
+      status[s.id] = { ok: null, kind: 'Site', ref, cacheKey: sk }; sitesToShoot.push({ key: s.id, url: ref, name: s.props?.name });
+    }
   }
   if (sitesToShoot.length) {
     log(`opening ${sitesToShoot.length} site(s) in headless Chrome…`);
@@ -129,6 +136,8 @@ export async function gatherAssets({ scenes, jobDir, log = () => {}, deps = {} }
         title: String(r.title ?? '').replace(/\s+/g, ' ').trim().slice(0, 120), description: String(r.description ?? '').replace(/\s+/g, ' ').trim().slice(0, 200),
         screenshot: dataUri('image/jpeg', fs.readFileSync(r.file)), icon,
       };
+      if (status[t.key].cacheKey && !deps.capture) putJson('refs', status[t.key].cacheKey, assets.sites[t.url]);
+      delete status[t.key].cacheKey;
       status[t.key] = { ...status[t.key], ok: true, detail: host };
       log(`✅ ${host}${icon ? '' : ' (no icon)'}`);
     }

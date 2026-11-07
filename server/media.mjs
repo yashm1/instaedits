@@ -223,14 +223,16 @@ export function buildEdl(direction, words, cuts, log, sents = null, language = '
     // the split layout takes ~0.35 s to open: lead by 0.2 s so the card is readable as the word is said
     // Split layout: consecutive cards hand off inside the open panel, so they only need a hair of space (CARD_GAP).
     // A card that would be squeezed (e.g. a CTA named in the last second) starts EARLIER — never before the previous card ends.
-    const earliest = idx === 0 ? 0.1 : prevEnd + CARD_GAP;
-    let start = idx === 0 && s.kind === 'Hook' && s.t < 1.5 ? 0.1 : Math.max(earliest, s.t - 0.2);
+    const earliest = idx === 0 ? 0 : prevEnd + CARD_GAP;
+    // the opening Hook owns FRAME 0 — the first thing a scroller sees and the default thumbnail
+    const opening = idx === 0 && s.kind === 'Hook' && s.t < 1.5;
+    let start = opening ? 0 : Math.max(earliest, s.t - 0.2);
     const latestEnd = scenes[idx + 1] ? scenes[idx + 1].t - 0.2 - CARD_GAP : cuts.total;
     const want = Math.min(s.dur, Math.max(MIN_CARD, 2));
     if (latestEnd - start < want) start = Math.max(earliest, latestEnd - want);
     const dur = Math.min(s.dur, latestEnd - start);
     if (dur < MIN_CARD) { log(`⚠️ no room for ${s.id} (${dur.toFixed(1)}s) — dropped`); return; }
-    edl.scenes.push({ id: `s${edl.scenes.length + 1}`, was: s.id, anchor: s.anchor, ...(s.word ? { word: s.word } : {}), start: +start.toFixed(2), dur: +dur.toFixed(2), kind: s.kind, props: s.props });
+    edl.scenes.push({ id: `s${edl.scenes.length + 1}`, was: s.id, anchor: s.anchor, ...(s.word ? { word: s.word } : {}), start: +start.toFixed(2), dur: +dur.toFixed(2), kind: s.kind, props: opening ? { ...s.props, opening: true } : s.props });
     prevEnd = start + dur;
   });
   // Zooms live only in talking-head gaps between cards. Snap to the nearest gap that fits, else drop.

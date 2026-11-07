@@ -37,6 +37,10 @@ export const config = {
   stagingDir: env.INSTAEDITS_STAGING_DIR || path.join(os.homedir(), 'Movies', 'Instaedits'),
   // Real Edits screenshots (editor + Automation settings), token-redacted. Gitignored; refreshed when older than 7 days.
   screensDir: env.INSTAEDITS_SCREENS_DIR || path.join(ROOT, 'screens'),
+  // Content-addressed cache shared across jobs (transcripts, LLM answers, renders, audio). Gitignored; safe to delete.
+  cacheDir: env.INSTAEDITS_CACHE_DIR || path.join(ROOT, 'cache'),
+  cacheEnabled: () => env.INSTAEDITS_CACHE !== 'off', // INSTAEDITS_CACHE=off forces every step to recompute
+  cacheMaxBytes: Number(env.INSTAEDITS_CACHE_MAX_GB || 8) * 1e9, // big renders are pruned least-recently-used beyond this
   jobsDir: env.INSTAEDITS_JOBS_DIR || path.join(ROOT, 'jobs'),
   remotionDir: path.join(ROOT, 'remotion'),
   canvas: { width: 1080, height: 1920, fps: 30 },
