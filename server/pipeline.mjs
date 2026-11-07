@@ -12,8 +12,10 @@ import { applyGuardrails } from './guardrails.mjs';
 import { gatherAssets, isRefKind } from './references.mjs';
 import { transcribe, detectLanguage, planCuts, tighten, sentences, attachAlt, buildEdl, probe as probeVideo } from './media.mjs';
 import { captureScreens, SCREENS } from './screens.mjs';
+import { captionLines, splitWindows } from './captions.mjs';
 import { runEdit } from './editor.mjs';
 import { checkExport } from './qa.mjs';
+import { writeGraph, compositeArgs } from './composite.mjs';
 
 const REMOTION = config.remotionDir;
 const JOBS = config.jobsDir;
@@ -31,8 +33,8 @@ export const STEP_DEFS = (q) => [
   { key: 'direction', title: 'Understand the video + creative direction (cards, screenshots, music, SFX)', model: config.models.director },
   { key: 'assets', title: 'Fetch real tool & repo visuals (GitHub API + page screenshots)', model: 'local (GitHub API + Chrome)' },
   { key: 'resolve', title: 'Resolve anchors → exact timestamps (EDL)', model: 'local' },
-  { key: 'render', title: 'Render the reel: split-screen infographics + speaker (Remotion)', model: 'local (Remotion)' },
-  { key: 'edit', title: 'Edits app: Hinglish captions, music, SFX, export', model: `local (Edits tool calls) + ${config.models.captions} for Hinglish` },
+  { key: 'edit', title: 'Edits app: captions (→ Hinglish), music, SFX, voice — audio mix + caption timing', model: `local (Edits tool calls) + ${config.models.captions} for Hinglish` },
+  { key: 'render', title: 'Render graphics + captions (Remotion) over your ORIGINAL footage (ffmpeg, colour untouched)', model: 'local (Remotion + ffmpeg)' },
   { key: 'verify', title: q === 'high' ? 'QA: check the export + watch it before publishing' : 'QA: check the export', model: q === 'high' ? `local (ffmpeg) + ${config.models.reviewer}` : 'local (ffmpeg)' },
 ];
 
@@ -248,7 +250,7 @@ const STEPS = {
     const { direction: d, notes } = applyGuardrails(raw, { totalSeconds: cuts.total, scriptWordCount: words.length, screens: available });
     notes.forEach((n) => log(`🛡 ${n}`));
     writeJson(f(job, 'direction.json'), d);
-    st.direction = { concept: d.concept, cards: d.scenes.length, zooms: d.zooms.length, sfx: d.sfx.length, captions: d.captions.style, music: `${d.music.query} @ ${d.music.volume} (ducked ${d.music.duckedVolume})` };
+    st.direction = { concept: d.concept, cards: d.scenes.length, zooms: d.zooms.length, sfx: d.sfx.length, music: `${d.music.query} @ ${d.music.volume} (ducked ${d.music.duckedVolume})` };
     log(`🎬 ${d.concept}`);
     return r;
   },
@@ -292,26 +294,12 @@ const STEPS = {
     job.state.edl = { cards: edl.scenes.map((s) => `${s.start}s ${s.kind}${s.word ? ` on “${s.word}”` : ''} (${s.dur}s)`), zooms: edl.zooms.length, sfx: edl.sfx.length };
   },
 
-  async render(job, step, log) {
-    if (fs.existsSync(f(job, 'reel.mp4')) && fs.statSync(f(job, 'reel.mp4')).mtimeMs > fs.statSync(f(job, 'reel.json')).mtimeMs) { log('♻️ reel.mp4 cached'); return; }
-    log('typecheck…');
-    execFileSync('npx', ['tsc', '--noEmit'], { cwd: REMOTION, encoding: 'utf8', stdio: 'pipe' });
-    const raw = f(job, 'reel.raw.mp4');
-    await sh('node', ['render.mjs', f(job, 'reel.json'), job.dir, raw], REMOTION, (l) => {
-      try { const e = JSON.parse(l); log(e.finished ? '✅ rendered' : `render ${e.progress}%`); } catch { log(l.slice(0, 160)); }
-    }, job.abort.signal);
-    // voice to -14 LUFS (Instagram's loudness), picture untouched
-    log('loudness → -14 LUFS…');
-    await sh('ffmpeg', ['-y', '-loglevel', 'error', '-i', raw, '-af', 'loudnorm=I=-14:TP=-1.5:LRA=11', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '256k', f(job, 'reel.mp4')], job.dir, () => {}, job.abort.signal);
-    fs.rmSync(raw, { force: true });
-  },
-
   async edit(job, step, log) {
     const st = job.state;
     const edl = JSON.parse(fs.readFileSync(f(job, 'edl.json'), 'utf8'));
     const stage = stagingFor(job.id);
-    const video = stageFile(f(job, 'reel.mp4'), path.join(stage, 'reel.mp4'));
-    const out = path.join(stage, 'final.mp4'); // Edits can write here; it cannot write into jobs/
+    const video = stageFile(f(job, 'tight.mp4'), path.join(stage, 'tight.mp4'));
+    const out = path.join(stage, 'edits.mp4'); // Edits can write here; it cannot write into jobs/. Used for AUDIO only.
     fs.rmSync(out, { force: true });
     log(`staged for Edits → ${stage}`);
     const { words } = JSON.parse(fs.readFileSync(f(job, 'transcript.json'), 'utf8'));
@@ -328,21 +316,52 @@ const STEPS = {
       const byN = new Map(o.lines.map((x) => [x.n, x.words]));
       return lines.map((_, i) => byN.get(i + 1) ?? null);
     };
-    const { report } = await runEdit({ video, edl, out, words: reelWords, transliterate, log });
+    const { report, captions } = await runEdit({ video, edl, out, words: reelWords, transliterate, log });
+    writeJson(f(job, 'captions.json'), captionLines(captions, reelWords, splitWindows(edl.scenes)));
     st.editorReport = report.join('\n');
     return usage;
+  },
+
+  async render(job, step, log) {
+    log('typecheck…');
+    execFileSync('npx', ['tsc', '--noEmit'], { cwd: REMOTION, encoding: 'utf8', stdio: 'pipe' });
+    const stage = stagingFor(job.id);
+    const editsAudio = path.join(stage, 'edits.mp4');
+    const hasEdits = !job.state.dryRun && fs.existsSync(editsAudio);
+    // 1) Remotion renders ONLY graphics + captions (transparent ProRes 4444). Neither Chrome nor Edits ever re-encodes
+    //    the speaker: both shifted the camera's colour by a few levels.
+    const props = JSON.parse(fs.readFileSync(f(job, 'reel.json'), 'utf8'));
+    const captions = fs.existsSync(f(job, 'captions.json')) ? JSON.parse(fs.readFileSync(f(job, 'captions.json'), 'utf8')) : [];
+    writeJson(f(job, 'reel.overlay.json'), { ...props, overlayOnly: true, captions });
+    await sh('node', ['render.mjs', f(job, 'reel.overlay.json'), job.dir, f(job, 'overlay.mov')], REMOTION, (l) => {
+      try { const e = JSON.parse(l); log(e.finished ? `✅ graphics${captions.length ? ` + ${captions.length} caption lines` : ''} rendered` : `graphics ${e.progress}%`); } catch { log(l.slice(0, 160)); }
+    }, job.abort.signal);
+    // 2) per-frame speaker placement from the same geometry code the graphics used
+    await sh('node', ['track.mjs', f(job, 'reel.json'), f(job, 'track.json')], REMOTION, () => {}, job.abort.signal);
+    const { track } = JSON.parse(fs.readFileSync(f(job, 'track.json'), 'utf8'));
+    // 3) ffmpeg: original camera pixels moved/zoomed only, graphics + captions on top, the Edits audio mix (music, SFX,
+    //    enhanced voice) at -14 LUFS, encoded with the camera's own colour description
+    fs.mkdirSync(stage, { recursive: true });
+    const out = path.join(stage, 'final.mp4');
+    fs.rmSync(out, { force: true });
+    log(`compositing your original footage under the graphics (colour untouched)${hasEdits ? ', audio from Edits' : ''}…`);
+    const graphFile = writeGraph(job.dir, { track, duration: props.duration, audioInput: hasEdits ? 2 : 0 });
+    await sh('ffmpeg', compositeArgs({ tight: f(job, 'tight.mp4'), overlay: f(job, 'overlay.mov'), graphFile, out, audio: hasEdits ? editsAudio : null }), job.dir, () => {}, job.abort.signal);
+    log(`✅ final.mp4 → ${out}`);
   },
 
   async verify(job, step, log) {
     const st = job.state;
     const out = path.join(stagingFor(job.id), 'final.mp4');
-    if (!fs.existsSync(out)) throw new Error(`final.mp4 not found at ${out} — the Edits export did not land at the requested path`);
+    if (!fs.existsSync(out)) throw new Error(`final.mp4 not found at ${out} — the render step did not land at the requested path`);
     const edl = JSON.parse(fs.readFileSync(f(job, 'edl.json'), 'utf8'));
-    const qa = await checkExport({ final: out, reel: f(job, 'reel.mp4'), scenes: edl.scenes, dir: job.dir });
-    log(`colour ${qa.colourRatio}× of the render · ${qa.cards.filter((c) => c.similarity >= 0.55).length}/${qa.cards.length} cards on screen at their time`);
+    const track = fs.existsSync(f(job, 'track.json')) ? JSON.parse(fs.readFileSync(f(job, 'track.json'), 'utf8')).track : null;
+    const qa = await checkExport({ final: out, overlay: f(job, 'overlay.mov'), original: f(job, 'tight.mp4'), track, scenes: edl.scenes, dir: job.dir });
+    log(`colour vs your original: ${qa.fidelity ? `max drift ${qa.fidelity.maxDrift} levels` : 'n/a'} · speaker saturation ${qa.colourRatio}× the original · ${qa.cards.filter((c) => c.similarity >= 0.55).length}/${qa.cards.length} cards on screen at their time`);
     st.qa = { ok: qa.ok, problems: qa.problems };
     if (!qa.ok) throw new Error(`QA failed: ${qa.problems.join('; ')}`);
     st.output = out;
+    fs.rmSync(f(job, 'overlay.mov'), { force: true }); // ~1 GB of ProRes, only needed for the card check
     if (st.quality !== 'high' || !qa.frames.length) { log(`final.mp4 ✔ → ${out}`); return; }
     // watch it: a vision model checks each card against what is being said at that moment
     const sents = sentences(JSON.parse(fs.readFileSync(f(job, 'transcript.json'), 'utf8')).words, planCuts(JSON.parse(fs.readFileSync(f(job, 'transcript.json'), 'utf8')).words, st.duration).toOut);

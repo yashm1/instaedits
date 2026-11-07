@@ -94,7 +94,7 @@ Whenever a card shows, the frame **splits**: the card fills the top half, you st
 
 ![The card library: Flow, Code, Steps, Chart, Hook](docs/assets/cards.png)
 
-Plus: **punch-in zooms**, **Hinglish captions** in 2–3-word lines (on the seam while a card shows, so your face stays clear), **ducked licensed music**, **SFX on card entries**, **voice loudness at −14 LUFS**, **dead-air removal** (pauses > 0.4 s) and a **1080×1920, 20 Mbit/s export**. No colour grade: your camera's colour is kept exactly.
+Plus: **punch-in zooms**, **Hinglish captions** in 2–3-word lines (on the seam while a card shows, so your face stays clear), **ducked licensed music**, **SFX on card entries**, **voice loudness at −14 LUFS**, **dead-air removal** (pauses > 0.4 s) and a **1080×1920, 20 Mbit/s export**. No colour grade, no colour conversion: your footage never passes through the browser renderer, and QA fails any export whose colour drifts more than 2.5 levels from your original.
 
 ## How it works
 
@@ -104,9 +104,9 @@ flowchart LR
   B --> C[cut dead air<br/>ffmpeg]
   C --> D[understand + direct<br/>Claude Opus]
   D --> E[guardrails + resolve<br/>→ exact EDL]
-  E --> F[render the reel<br/>Remotion, split screen]
-  F --> G[captions · music · SFX · export<br/>Edits, plain tool calls]
-  G --> H[QA: compare + review]
+  E --> G[captions · music · SFX<br/>Edits, plain tool calls]
+  G --> F[graphics + captions over your original pixels<br/>Remotion + ffmpeg]
+  F --> H[QA: colour vs original + review]
   H --> I[final.mp4]
 ```
 
@@ -119,8 +119,8 @@ flowchart LR
 | 5 | **Understand the video + creative direction** (also captures the Edits screenshots) | Claude Opus | ✅ |
 | 6 | **Fetch real visuals** for named tools / repos (verified, see above) | GitHub API + headless Chrome | — |
 | 7 | Guardrails, then anchors → exact timestamps (the EDL) | local | — |
-| 8 | **Render the reel**: speaker + cards in one pass, split layout, then −14 LUFS | Remotion + ffmpeg | — |
-| 9 | **Edits**: Hinglish captions, music, SFX, voice enhance, export — exact tool calls | Edits app (+ Claude Sonnet for Hinglish) | ✅ (captions only) |
+| 8 | **Edits**: captions (its speech model → ≤3-word lines → Hinglish), licensed music, SFX, voice enhance — exact tool calls. Used for the **audio mix and caption text/timing only** | Edits app (+ Claude Sonnet for Hinglish) | ✅ (captions only) |
+| 9 | **Render**: Remotion renders graphics + captions on transparency; ffmpeg places your **original camera pixels** underneath (moved/zoomed, never colour-converted) with the Edits audio at −14 LUFS | Remotion + ffmpeg | — |
 | 10 | **QA**: export vs render (length, colour, every card); Full mode: a model reviews a contact sheet | ffmpeg (+ Claude Sonnet) | ✅ (Full only) |
 
 The director names the sentence *and the spoken word* for each card; the resolver finds that word in the real transcript, so cards land as the thing is said, not on a guessed timestamp. Deep dive: [docs/architecture.md](docs/architecture.md).
@@ -153,7 +153,7 @@ The director names the sentence *and the spoken word* for each card; the resolve
 18.10s Stat   (2.4s)   riser starts 0.9s earlier
 zooms: 12.4s +1.2s → 110%,  20.7s +1.2s → 112%        (only where no card is showing)
 ```
-Remotion renders exactly that timeline; the Edits step adds captions, music and SFX with plain tool calls. Nothing re-times it.
+Edits adds captions, music and SFX with plain tool calls; Remotion renders the graphics and captions on that exact timeline over your original footage. Nothing re-times it.
 </details>
 
 ## Editing rules (enforced in code where possible)
@@ -167,7 +167,7 @@ The prompt carries the creative doctrine ([`server/prompts.mjs`](server/prompts.
 | Voice stays dominant | **Code + tests:** music ≤ 0.16, ducked to ≤ 0.6× |
 | Cards are watchable | **Code + tests:** 1.5–5.5 s each, never overlapping; malformed cards dropped; zooms only in card-free gaps; three-of-a-kind in a row is *flagged*, not fixed |
 | Cards land on the spoken word | **Code + tests:** sentence + word anchors resolved against the transcript |
-| Colour is never altered | **Code + tests:** no grade tool is ever called; QA fails a job whose export lost colour |
+| Colour is never altered | **Code + tests:** no grade tool is ever called; the speaker is composited from the original file; QA measures the export against your original (≤ 2.5 levels) |
 | Captions readable, face clear | **Code + tests:** ≤ 3 words per line, split at real word gaps; on the seam during a card, at 72 % otherwise; Latin script only |
 | Respect the platform UI | **Layout constants:** card content kept below the top bar; captions above the bottom 20 % |
 | One hero colour | **Theme constants + WCAG contrast tests** |
@@ -216,7 +216,7 @@ Everything environment-specific is in [`server/config.mjs`](server/config.mjs) a
 
 **Beta.** Verified end to end on a real 24-second Hindi talking-head reel (10/10 steps, about $0.17 in model calls): split-screen cards on the spoken words, real screenshots of the Edits app (token redacted) and of the GitHub repo, Latin-script Hinglish captions, music, SFX, a 1080×1920 export — and QA confirming colour, length and every card at its time. 215+ tests and CI cover direction, guardrails, timing, the Edits executor (against a fake app), redaction and QA. Edits is a closed-source app whose automation API may change; if a step misbehaves, open an issue with the dashboard log.
 
-Known limits: the export is HEVC (the app offers no H.264) · the Edits transcription may drop English words in Hindi speech (mitigated by the second pass and the glossary, not eliminated) · macOS + Edits only · the Hinglish fallback transliteration is phonetic, not idiomatic · rendering a 25 s reel takes ~3 min · Voice Enhance depends on an app panel and is skipped (with a note) if the app refuses · the editing rules are heuristics from low-evidence sources, so measure your own retention.
+Known limits: Edits' own video export (HEVC only) shifts colour slightly, so its picture is never used — only its audio and caption timing · the Edits transcription may drop English words in Hindi speech (mitigated by the second pass and the glossary, not eliminated) · macOS + Edits only · the Hinglish fallback transliteration is phonetic, not idiomatic · rendering a 25 s reel takes ~3 min · Voice Enhance depends on an app panel and is skipped (with a note) if the app refuses · the editing rules are heuristics from low-evidence sources, so measure your own retention.
 
 Roadmap: end-to-end verification on more real videos · occurrence-aware anchors · brand/profile theming · more card types (timeline, graph) · an HTTP workflow API for integrations. Ideas and PRs welcome.
 

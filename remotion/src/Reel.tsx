@@ -1,5 +1,8 @@
 import React from 'react';
-import {AbsoluteFill, Easing, interpolate, OffthreadVideo, Sequence, spring, staticFile, useCurrentFrame, useVideoConfig} from 'remotion';
+import {AbsoluteFill, interpolate, OffthreadVideo, Sequence, staticFile, useCurrentFrame, useVideoConfig} from 'remotion';
+import {PANEL_H, splitAt, splitWindows, zoomAt} from './geometry';
+import {loadFont} from '@remotion/google-fonts/Inter';
+const captionFont = loadFont('normal', {weights: ['800'], subsets: ['latin']}).fontFamily;
 import {Bullets, Chart, Code, Compare, Fanout, Flow, Hook, PanelContext, Repo, Screen, Site, Stat, Steps, theme, Title} from './lib';
 
 // The whole reel in one composition: the speaker video + every card, laid out SPLIT (card panel on top, speaker below)
@@ -13,24 +16,16 @@ export type ReelProps = {
   zooms: {start: number; dur: number; scale: number}[];
   assets?: unknown; // read by Repo/Site via getInputProps()
   screens?: unknown; // read by Screen via getInputProps()
+  /** true: render ONLY the graphics on transparency; ffmpeg composites the untouched speaker pixels underneath (exact colour). */
+  overlayOnly?: boolean;
+  /** Caption lines (text + timing from the Edits app, Latin-script Hinglish). y = normalised centre (seam during a card). */
+  captions?: CaptionLine[];
 };
+export type CaptionLine = {start: number; end: number; y: number; words: {text: string; start: number; end: number}[]};
 
 const KINDS: Record<string, React.FC<any>> = {Hook, Title, Flow, Fanout, Steps, Chart, Code, Stat, Bullets, Compare, Repo, Site, Screen};
 
-export const PANEL_H = 960; // top half of 1080x1920
-const EASE_F = 11; // frames for the split to open/close
-const MERGE_GAP = 0.7; // cards closer than this keep the split open (no bounce back to full-frame)
-
-/** Merge card windows separated by < MERGE_GAP seconds into continuous split-layout windows. Exported for tests. */
-export function splitWindows(scenes: ReelScene[]): {start: number; end: number}[] {
-  const ws: {start: number; end: number}[] = [];
-  for (const s of [...scenes].sort((a, b) => a.start - b.start)) {
-    const last = ws[ws.length - 1];
-    if (last && s.start - last.end < MERGE_GAP) last.end = Math.max(last.end, s.start + s.dur);
-    else ws.push({start: s.start, end: s.start + s.dur});
-  }
-  return ws;
-}
+export {PANEL_H, splitWindows} from './geometry';
 
 class Guard extends React.Component<{children: React.ReactNode}, {bad: boolean}> {
   state = {bad: false};
@@ -38,35 +33,24 @@ class Guard extends React.Component<{children: React.ReactNode}, {bad: boolean}>
   render() { return this.state.bad ? <AbsoluteFill style={{background: theme.bg}} /> : this.props.children; }
 }
 
-export const Reel: React.FC<ReelProps> = ({video, scenes, zooms}) => {
+export const Reel: React.FC<ReelProps> = ({video, scenes, zooms, overlayOnly, captions = []}) => {
   const f = useCurrentFrame();
   const {fps} = useVideoConfig();
-  const t = f / fps;
 
-  // split amount 0..1 (spring in at window start, out at window end)
-  let split = 0;
-  for (const w of splitWindows(scenes)) {
-    const a = Math.round(w.start * fps), b = Math.round(w.end * fps);
-    if (f < a - 1 || f > b + EASE_F) continue;
-    const open = spring({frame: f - a, fps, config: {damping: 200}, durationInFrames: EASE_F});
-    const close = spring({frame: f - (b - EASE_F), fps, config: {damping: 200}, durationInFrames: EASE_F});
-    split = Math.max(split, Math.min(open, 1 - close));
-  }
-
-  // punch-in on the full-frame speaker only (never while split)
-  let zoom = 1;
-  for (const z of zooms) {
-    const k = interpolate(t, [z.start, z.start + 0.25, z.start + z.dur - 0.25, z.start + z.dur], [0, 1, 1, 0], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.inOut(Easing.cubic)});
-    zoom = Math.max(zoom, 1 + (z.scale - 1) * k * (1 - split));
-  }
+  // split amount and punch-in from the shared geometry (the ffmpeg compositor uses the very same functions)
+  const split = splitAt(f, fps, splitWindows(scenes));
+  const zoom = zoomAt(f, fps, zooms, split);
 
   const seam = PANEL_H * split;
   return (
-    <AbsoluteFill style={{background: '#000'}}>
-      {/* speaker: fills everything below the seam; object-fit keeps the face in the visible window */}
-      <div style={{position: 'absolute', left: 0, right: 0, top: seam, bottom: 0, overflow: 'hidden'}}>
-        <OffthreadVideo src={staticFile(video)} style={{width: '100%', height: '100%', objectFit: 'cover', objectPosition: '50% 30%', transform: `scale(${zoom})`, transformOrigin: '50% 34%'}} />
-      </div>
+    <AbsoluteFill style={{background: overlayOnly ? 'transparent' : '#000'}}>
+      {/* speaker: fills everything below the seam; object-fit keeps the face in the visible window.
+          In overlayOnly mode ffmpeg reproduces exactly this geometry (y = SPEAKER_SHIFT·seam, same zoom) from the original file. */}
+      {overlayOnly ? null : (
+        <div style={{position: 'absolute', left: 0, right: 0, top: seam, bottom: 0, overflow: 'hidden'}}>
+          <OffthreadVideo src={staticFile(video)} style={{width: '100%', height: '100%', objectFit: 'cover', objectPosition: '50% 30%', transform: `scale(${zoom})`, transformOrigin: '50% 34%'}} />
+        </div>
+      )}
       {/* card panel slides down from the top */}
       <div style={{position: 'absolute', left: 0, right: 0, top: 0, height: PANEL_H, transform: `translateY(${-(1 - split) * PANEL_H}px)`, overflow: 'hidden', background: theme.bg}}>
         <PanelContext.Provider value={{height: PANEL_H}}>
@@ -84,6 +68,7 @@ export const Reel: React.FC<ReelProps> = ({video, scenes, zooms}) => {
       </div>
       {/* seam: one accent hairline with a soft glow */}
       {split > 0.01 ? <div style={{position: 'absolute', left: 0, right: 0, top: seam - 2, height: 4, background: theme.accent, opacity: split, boxShadow: `0 0 24px ${theme.accent}`}} /> : null}
+      <Captions lines={captions} t={f / fps} split={split} />
     </AbsoluteFill>
   );
 };
@@ -93,4 +78,23 @@ const CardFade: React.FC<{children: React.ReactNode; dur: number}> = ({children,
   const f = useCurrentFrame();
   const o = interpolate(f, [0, 6, dur - 6, dur], [0, 1, 1, 0], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'});
   return <AbsoluteFill style={{opacity: o, transform: `translateY(${(1 - o) * 18}px)`}}>{children}</AbsoluteFill>;
+};
+
+// Captions: bold white words, the word being spoken sits on a pink box (the look of Edits' "Highlighter" style).
+const CAPTION_PINK = '#ff2d7a';
+// Position follows the layout frame by frame: on the seam while a card shows, lower-middle on the full-frame speaker —
+// so a line that outlives its card never ends up over the face.
+const CAPTION_Y_FULL = 0.72;
+const Captions: React.FC<{lines: CaptionLine[]; t: number; split: number}> = ({lines, t, split}) => {
+  const line = lines.find((l) => t >= l.start && t < l.end);
+  if (!line) return null;
+  const y = CAPTION_Y_FULL * 1920 + (PANEL_H - CAPTION_Y_FULL * 1920) * split;
+  return (
+    <div style={{position: 'absolute', left: 60, right: 60, top: y, transform: 'translateY(-50%)', display: 'flex', justifyContent: 'center', flexWrap: 'wrap', gap: '6px 14px', fontFamily: captionFont, fontWeight: 800, fontSize: 68, lineHeight: 1.12, color: '#fff', textShadow: '0 3px 12px rgba(0,0,0,0.55)'}}>
+      {line.words.map((w, i) => {
+        const on = t >= w.start && t < w.end;
+        return <span key={i} style={{padding: '2px 12px', borderRadius: 12, background: on ? CAPTION_PINK : 'transparent', textShadow: on ? 'none' : undefined}}>{w.text}</span>;
+      })}
+    </div>
+  );
 };

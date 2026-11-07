@@ -28,10 +28,13 @@ if (si > 0) {
   process.exit(0);
 }
 let last = -1;
+// overlayOnly: lossless ProRes 4444 WITH ALPHA (graphics only) — the speaker is composited by ffmpeg from the original file.
+// Otherwise (previews): h264. Remotion's own H.264 encode shifts colour by a few levels, so it is never the deliverable.
+const enc = inputProps.overlayOnly
+  ? {codec: 'prores', proResProfile: '4444', imageFormat: 'png', pixelFormat: 'yuva444p10le', muted: true}
+  : {codec: 'h264', crf: 16, x264Preset: 'slow', pixelFormat: 'yuv420p', colorSpace: 'bt709', audioCodec: 'aac', audioBitrate: '256k'};
 await renderMedia({
-  composition, serveUrl, inputProps, outputLocation: path.resolve(out),
-  codec: 'h264', crf: 16, x264Preset: 'slow', pixelFormat: 'yuv420p', colorSpace: 'bt709', // bt709 = no colour shift vs the source
-  audioCodec: 'aac', audioBitrate: '256k', concurrency: '50%',
+  composition, serveUrl, inputProps, outputLocation: path.resolve(out), ...enc, concurrency: '50%',
   onProgress: ({progress}) => { const pct = Math.floor(progress * 10) * 10; if (pct !== last) { last = pct; emit({progress: pct}); } },
 });
 emit({finished: true, out: path.resolve(out)});

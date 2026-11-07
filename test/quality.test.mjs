@@ -3,9 +3,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { lineSplits, splitWindows, captionY, CAPTION_Y, devanagariToLatin, latinLine } from '../server/captions.mjs';
+import { lineSplits, splitWindows, captionY, CAPTION_Y, devanagariToLatin, latinLine, captionLines } from '../server/captions.mjs';
 import { looksSecret, secretBoxes, redactFile } from '../server/screens.mjs';
-import { judge, QA } from '../server/qa.mjs';
+import { judge, QA, cleanWindows } from '../server/qa.mjs';
+import { trackExpr, filterGraph, compositeArgs } from '../server/composite.mjs';
 
 // ───────── caption lines ─────────
 const ws = (n) => Array.from({ length: n }, (_, i) => ({ start: i, end: i + 0.8 }));
@@ -20,8 +21,8 @@ test('lineSplits: ≤3 words per line, balanced, split in the gap between words'
 test('splitWindows merges cards closer than 0.7 s (the split stays open) — same rule as Reel.tsx', () => {
   const w = splitWindows([{ start: 5, dur: 2 }, { start: 0.1, dur: 2 }, { start: 7.5, dur: 1 }, { start: 2.6, dur: 1 }]);
   assert.deepEqual(w, [{ start: 0.1, end: 3.6 }, { start: 5, end: 8.5 }]);
-  const tsx = fs.readFileSync('remotion/src/Reel.tsx', 'utf8');
-  assert.match(tsx, /const MERGE_GAP = 0\.7;/, 'keep the merge gap identical on both sides');
+  const geo = fs.readFileSync('remotion/src/geometry.ts', 'utf8');
+  assert.match(geo, /export const MERGE_GAP = 0\.7;/, 'keep the merge gap identical on both sides');
 });
 
 test('captionY: on the seam if the caption is mostly during a card, else lower-middle', () => {
@@ -100,4 +101,60 @@ test('judge: catches black-and-white (the bug that shipped), missing/late cards 
   assert.match(judge({ ...good, finalDur: 20 }).problems[0], /duration/);
   assert.match(judge({ ...good, finalDur: NaN }).problems[0], /duration/, 'an unreadable export is a failure, not a pass');
   assert.ok(QA.minColourRatio >= 0.5);
+});
+
+test('judge: fails when the export drifts from the ORIGINAL camera colour (the "colour distorted" report)', () => {
+  assert.equal(judge({ ...good, fidelity: { maxDrift: 0.2 } }).ok, true);
+  assert.match(judge({ ...good, fidelity: { maxDrift: 3.1 } }).problems[0], /colour differs from your original by 3\.1 levels/);
+  assert.ok(QA.maxColourDrift <= 2.5);
+});
+
+test('cleanWindows: only full-frame, un-zoomed stretches ≥1 s, longest first, 1 s sample from the middle', () => {
+  const T = (y, zoom, n) => Array.from({ length: n }, () => ({ y, zoom }));
+  const track = [...T(0, 1, 45), ...T(300, 1, 60), ...T(0, 1.1, 30), ...T(0, 1, 90), ...T(0, 1, 0), ...T(672, 1, 10), ...T(0, 1, 20)];
+  assert.deepEqual(cleanWindows(track), [{ t: 5.48, d: 1 }, { t: 0.23, d: 1 }], 'the 20-frame tail is too short; split/zoom frames never count');
+});
+
+// ───────── compositor (speaker pixels untouched) ─────────
+test('trackExpr: run-length terms, base omitted, single frames use eq()', () => {
+  assert.equal(trackExpr([0, 0, 0]), '0');
+  assert.equal(trackExpr([0, 5, 5, 5, 0, 7]), '0+between(n,1,3)*5+eq(n,5)*7');
+  assert.equal(trackExpr([1, 1.05, 1.05, 1], { variable: 'on', base: 1, digits: 4 }), '1+between(on,1,2)*0.05');
+});
+
+test('filterGraph: the speaker is only moved/scaled (no colour filters on it); graphics on top; voice to -14 LUFS', () => {
+  const g = filterGraph({ track: [{ y: 0, zoom: 1 }, { y: 672, zoom: 1 }], duration: 2 });
+  const spk = g.split('\n').find((l) => l.startsWith('[0:v]'));
+  assert.match(spk, /zoompan/); assert.match(spk, /format=yuvj420p\[spk\];?$/);
+  for (const banned of ['eq=', 'colorbalance', 'curves', 'lut', 'hue=', 'colorchannelmixer', 'colorspace', 'out_color_matrix']) assert.ok(!g.includes(banned), banned);
+  assert.match(g, /overlay=x=0:y='0\+eq\(n,1\)\*672'/);
+  assert.match(g, /\[base\]\[g\]overlay/); assert.match(g, /loudnorm=I=-14/);
+});
+
+test('compositeArgs: encodes with the camera\'s colour description (full range, BT.709 everywhere)', () => {
+  const a = compositeArgs({ tight: 't.mp4', overlay: 'o.mov', graphFile: 'g', out: 'r.mp4' });
+  const v = (k) => a[a.indexOf(k) + 1];
+  assert.equal(v('-pix_fmt'), 'yuvj420p'); assert.equal(v('-color_range'), 'pc');
+  for (const k of ['-colorspace', '-color_primaries', '-color_trc']) assert.equal(v(k), 'bt709');
+});
+
+test('captionLines: transcript word times when counts match, else proportional; contiguous; seam vs full position', () => {
+  const words = [{ start: 0.2, end: 0.5 }, { start: 0.6, end: 0.9 }, { start: 1.0, end: 1.4 }];
+  const [a, b] = captionLines([
+    { startTime: 0.1, endTime: 1.5, words: ['bhai', 'ye', 'pura'] },
+    { startTime: 3, endTime: 4, words: ['Claude', 'ne'] },
+  ], words, [{ start: 0, end: 2 }]);
+  assert.deepEqual(a.words.map((w) => [w.text, w.start, w.end]), [['bhai', 0.2, 0.6], ['ye', 0.6, 1], ['pura', 1, 1.5]]);
+  assert.equal(a.y, CAPTION_Y.split, 'during a card → on the seam');
+  assert.deepEqual(b.words.map((w) => [w.start, w.end]), [[3, 3.75], [3.75, 4]], 'no transcript words inside → split by word length');
+  assert.equal(b.y, CAPTION_Y.full);
+  assert.deepEqual(captionLines([{ startTime: 0, endTime: 1, words: [] }], [], []), [], 'empty lines are dropped');
+});
+
+test('filterGraph: audio comes from the Edits mix when given, trimmed to exactly the reel length (it ran 1.3 s long)', () => {
+  const g = filterGraph({ track: [{ y: 0, zoom: 1 }], duration: 24.32, audioInput: 2 });
+  assert.match(g, /\[2:a\]atrim=0:24\.320,asetpts=PTS-STARTPTS,loudnorm/);
+  assert.match(filterGraph({ track: [{ y: 0, zoom: 1 }], duration: 5 }), /\[0:a\]atrim=0:5\.000/, 'dry run: the camera audio');
+  const a = compositeArgs({ tight: 't', overlay: 'o', graphFile: 'g', out: 'x', audio: 'edits.mp4' });
+  assert.deepEqual(a.slice(a.indexOf('-i'), a.indexOf('-filter_complex_script')), ['-i', 't', '-i', 'o', '-i', 'edits.mp4']);
 });

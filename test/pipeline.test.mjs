@@ -8,7 +8,7 @@ import { MODELS } from '../server/claude.mjs';
 import { SCENE_KINDS } from '../server/catalog.mjs';
 
 test('step order is fixed and creative decisions precede execution', () => {
-  assert.deepEqual(STEP_DEFS('high').map((s) => s.key), ['probe', 'transcribe', 'tighten', 'translate', 'direction', 'assets', 'resolve', 'render', 'edit', 'verify']);
+  assert.deepEqual(STEP_DEFS('high').map((s) => s.key), ['probe', 'transcribe', 'tighten', 'translate', 'direction', 'assets', 'resolve', 'edit', 'render', 'verify']);
 });
 
 test('models: Opus directs; rendering is local; the Edits edit is plain tool calls (a model only writes Hinglish)', () => {

@@ -1,22 +1,22 @@
-// Executes the edit in the Edits app with plain tool calls — no LLM. Every value is exact and every step is checked.
-// Why: an LLM executor improvised (it set saturation 0.04 — a MULTIPLIER in Edits — and turned the video black and white,
-// and snapped a card 9 s late). The picture (speaker + cards, split layout) is already final from Remotion; Edits adds
-// what it is best at: captions, licensed music, SFX, voice polish, and the export.
+// The Edits app step, as plain tool calls — no LLM. Every value is exact and every step is checked.
+// Edits does what it is best at: the CAPTIONS (its speech model, split into short lines, Hinglish), licensed MUSIC, SFX
+// and voice polish. Its export is used for its AUDIO MIX and its caption TEXT/TIMING only — never for the picture:
+// Edits re-encodes video (HEVC only) with a small magenta shift, so the picture is composited by ffmpeg from the
+// original camera pixels (composite.mjs). History: an LLM executor once set saturation 0.04 (a MULTIPLIER) → B&W.
 import fs from 'node:fs';
 import { tool as editsTool } from './edits-mcp.mjs';
 import { isTransient } from './media.mjs';
-import { lineSplits, splitWindows, captionY, latinLine, hasDevanagari } from './captions.mjs';
-import { CAPTION_STYLES } from './catalog.mjs';
+import { lineSplits, latinLine, hasDevanagari } from './captions.mjs';
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const capsOf = async (tool) => ((await tool('captions', {}))?.captions ?? []).slice().sort((a, b) => a.startTime - b.startTime);
 
 /**
- * @param o.video  staged reel.mp4 (final picture + loudness-normalised voice)
- * @param o.edl    { duration, language, scenes, sfx, captions:{style}, music }
- * @param o.words  [{start,end}] spoken words on the reel timeline (for caption line breaks)
+ * @param o.video  staged tight.mp4 (the speaker, silence-tightened; same timeline as the final reel)
+ * @param o.edl    { duration, language, sfx, music }
+ * @param o.words  [{start,end}] spoken words on that timeline (for caption line breaks)
  * @param o.transliterate async (lines: string[][]) => string[][] | null — Latin Hinglish for non-English captions
- * @returns { report: string[] }
+ * @returns { report: string[], captions: [{startTime, endTime, words: string[]}] }  (+ the export at `out`, used for audio)
  */
 export async function runEdit({ video, edl, out, words = [], transliterate = null, log = () => {}, tool = editsTool, sleep = wait, exportTimeoutMs = 15 * 60_000 }) {
   const report = [];
@@ -26,10 +26,11 @@ export async function runEdit({ video, edl, out, words = [], transliterate = nul
   // 1. project + the finished picture
   await tool('newProject');
   await tool('setAspectRatio', { ratio: '9:16' });
+  await soft('project frame rate', () => tool('setFrameRate', { fps: 30 })); // the camera's rate; without it the export came out at 60 fps
   const imp = await tool('importMedia', { path: video });
   const id = imp?.id;
   if (!id) throw new Error('importMedia returned no clip id: ' + JSON.stringify(imp).slice(0, 160));
-  log('imported the reel');
+  log('imported the speaker clip');
   // never grade: the colour is the camera's. Verify nothing upstream left a filter on the clip.
   const adj = await soft('adjust check', () => tool('getAdjustState', { id }));
   if (adj && adj.isDefault === false) note(`⚠️ the clip has non-default adjustments (saturation ${adj.saturation}) — check the colour`);
@@ -43,7 +44,7 @@ export async function runEdit({ video, edl, out, words = [], transliterate = nul
     log('voice enhance on');
   });
 
-  // 3. captions: generate (cloud — retry), short lines at real word gaps, Latin Hinglish, style, position
+  // 3. captions: generate (cloud — retry), short lines at real word gaps, Latin Hinglish
   const lang = edl.language ?? 'en';
   let caps = [];
   for (let i = 1; i <= 4 && !caps.length; i++) {
@@ -77,13 +78,8 @@ export async function runEdit({ video, edl, out, words = [], transliterate = nul
     }
     note(`captions in Latin-script Hinglish${fallback ? ` (${fallback} line(s) via the rule-based fallback)` : ''}`);
   }
-  // only readable styles; plans made before the catalog was narrowed are corrected here. The app's own highlight colour is kept.
-  const style = CAPTION_STYLES.includes(edl.captions?.style) ? edl.captions.style : CAPTION_STYLES[0];
-  await tool('setCaptionStyle', { style });
-  const wins = splitWindows(edl.scenes ?? []);
-  for (const c of await capsOf(tool)) await tool('setTextPosition', { id: c.id, x: 0.5, y: captionY(c, wins) });
-  const left = (await capsOf(tool)).filter((c) => c.tokens.some((t) => hasDevanagari(t.text)));
-  if (left.length && lang !== 'en') note(`⚠️ ${left.length} caption line(s) still contain Devanagari`);
+  // the lines as the app now holds them (text + timing) → rendered by Remotion over the original footage
+  const captions = (await capsOf(tool)).map((c) => ({ startTime: c.startTime, endTime: c.endTime, words: c.tokens.map((t) => (hasDevanagari(t.text) ? latinLine([t.text], null)[0] : t.text)) }));
 
   // 4. music: one licensed instrumental bed under the voice
   const m = edl.music;
@@ -131,6 +127,6 @@ export async function runEdit({ video, edl, out, words = [], transliterate = nul
     if (st?.progress != null) log(`export ${Math.round(Number(st.progress) * (Number(st.progress) <= 1 ? 100 : 1))}%`);
   }
   if (Date.now() - t0 >= exportTimeoutMs) throw new Error('export timed out');
-  note(`exported → ${out}`);
-  return { report };
+  note(`exported the audio mix → ${out}`);
+  return { report, captions };
 }

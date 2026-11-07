@@ -14,7 +14,7 @@ export function lineSplits(words, maxWords = 3) {
   return out;
 }
 
-/** Split-layout windows (cards closer than `gap` s merge). KEEP IN SYNC with splitWindows() in remotion/src/Reel.tsx. */
+/** Split-layout windows (cards closer than `gap` s merge). KEEP IN SYNC with splitWindows() in remotion/src/geometry.ts (a test checks). */
 export function splitWindows(scenes, gap = 0.7) {
   const ws = [];
   for (const s of [...scenes].sort((a, b) => a.start - b.start)) {
@@ -25,7 +25,8 @@ export function splitWindows(scenes, gap = 0.7) {
   return ws;
 }
 
-export const CAPTION_Y = { split: 0.5, full: 0.72 }; // on the seam while a card shows (face stays clear); lower-middle otherwise
+export const CAPTION_Y = { split: 0.5, full: 0.72 }; // on the seam while a card shows (face stays clear); lower-middle otherwise.
+// The Remotion caption layer interpolates between the two per frame with the split amount (Reel.tsx); `y` here is a hint.
 /** Normalised y for a caption: on the seam if it overlaps (mostly) a split window, else the full-frame position. */
 export function captionY(cap, windows) {
   const len = Math.max(0.01, cap.endTime - cap.startTime);
@@ -80,4 +81,24 @@ export const hasDevanagari = (s) => /\p{Script=Devanagari}/u.test(String(s));
 export function latinLine(tokens, llmWords) {
   const ok = Array.isArray(llmWords) && llmWords.length === tokens.length && llmWords.every((w) => typeof w === 'string' && w.trim() && !/\s/.test(w.trim()) && !hasDevanagari(w));
   return ok ? llmWords.map((w) => w.trim()) : tokens.map((t) => (hasDevanagari(t) ? devanagariToLatin(t) : t));
+}
+
+/**
+ * Caption lines for the Remotion caption layer: text + timing come from the Edits app (lines already ≤3 words, Latin),
+ * word timing from the transcript when the counts match, else proportional to word length. Words are contiguous so the
+ * highlight never blinks off mid-line. `y`: on the seam during a card, lower-middle otherwise.
+ */
+export function captionLines(caps, words, windows) {
+  return caps.map((c) => {
+    const texts = c.words;
+    const inside = words.filter((w) => w.start >= c.startTime - 0.05 && w.end <= c.endTime + 0.05);
+    let starts;
+    if (inside.length === texts.length && texts.length) starts = inside.map((w) => Math.max(c.startTime, w.start));
+    else {
+      const len = texts.map((t) => Math.max(1, t.length)), total = len.reduce((a, b) => a + b, 0) || 1;
+      let acc = c.startTime; starts = len.map((l) => { const s = acc; acc += ((c.endTime - c.startTime) * l) / total; return s; });
+    }
+    const ws = texts.map((text, i) => ({ text, start: +starts[i].toFixed(3), end: +(i + 1 < texts.length ? starts[i + 1] : c.endTime).toFixed(3) }));
+    return { start: +c.startTime.toFixed(3), end: +c.endTime.toFixed(3), y: captionY(c, windows), words: ws };
+  }).filter((l) => l.words.length);
 }

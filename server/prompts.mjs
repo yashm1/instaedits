@@ -1,5 +1,5 @@
 import { config } from './config.mjs';
-import { CAPTION_STYLES, TRANSITIONS, SFX, MUSIC_QUERIES, SCENE_KINDS } from './catalog.mjs';
+import { SFX, MUSIC_QUERIES, SCENE_KINDS } from './catalog.mjs';
 
 // ───────────────────────── 1. DIRECTOR (Opus) ─────────────────────────
 // Opus makes EVERY creative decision here. Everything downstream is deterministic code (Remotion + plain Edits tool calls).
@@ -22,8 +22,6 @@ RETENTION DOCTRINE (numbers are limits)
 - Payoff: last card = takeaway/result or the call to action, then ~1s of speaker.
 - Punch-ins on the full-frame speaker: 108-114%, 0.8-1.6s, only where no card is showing, ≤1 per 6s, on emphatic sentences.
 
-CAPTIONS: Latin-script Hinglish lines are made automatically; choose 'Highlighter' (active word highlighted — default) or 'Default' (calmer, for slow/serious videos).
-
 AUDIO (linear volume; voice = 1.0): one calm instrumental bed, volume 0.10-0.14 (never >0.16), ducked 0.6x under voice, fadeIn 0.6s, fadeOut 1.2s; query from the allowed list + 2 fallbacks. SFX sparse: ~5 per 30s max — whoosh on the hook and a few card entries (0.30-0.42), ONE riser (0.25-0.32) only into the payoff; offsets -0.05s for whooshes, riser -0.9s.
 
 COLOUR GRADE: none — the camera's colour is kept exactly.
@@ -32,7 +30,7 @@ Return ONLY JSON matching the schema. Be terse; no commentary.`;
 
 export const DIRECTOR_SCHEMA = {
   type: 'object',
-  required: ['concept', 'scenes', 'zooms', 'sfx', 'captions', 'music'],
+  required: ['concept', 'scenes', 'zooms', 'sfx', 'music'],
   properties: {
     concept: { type: 'string', description: 'One sentence: what the video is about, the angle and the emotional arc' },
     scenes: {
@@ -65,7 +63,6 @@ export const DIRECTOR_SCHEMA = {
         },
       },
     },
-    captions: { type: 'object', required: ['style'], properties: { style: { enum: CAPTION_STYLES } } },
     music: {
       type: 'object', required: ['query', 'fallbacks', 'volume', 'duckedVolume', 'fadeIn', 'fadeOut'],
       properties: {

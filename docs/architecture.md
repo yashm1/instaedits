@@ -9,9 +9,9 @@ flowchart LR
   C --> D[understand + direct<br/>Opus · structured JSON]
   D --> G[guardrails<br/>enforced limits]
   G --> E[resolve anchors<br/>→ edl.json]
-  E --> F[render the reel<br/>Remotion: speaker + cards, split screen]
-  F --> H[Edits: Hinglish captions, music, SFX, export<br/>plain tool calls — no LLM]
-  H --> Q[QA: export vs render + vision review]
+  E --> H[Edits: captions → Hinglish, music, SFX<br/>plain tool calls — audio mix + caption timing]
+  H --> F[Remotion graphics + captions, alpha<br/>ffmpeg: ORIGINAL pixels underneath]
+  F --> Q[QA: colour vs original + vision review]
   Q --> I[final.mp4]
 ```
 
@@ -25,7 +25,7 @@ flowchart LR
 | `tight.mp4` + `cuts.json` | ffmpeg | the editor (never re-cut) |
 | `direction.json` | Opus, then guardrails | resolver |
 | `edl.json` | resolver (anchors → exact seconds) | edit prompt |
-| `reel.json` → `reel.mp4` | resolver → Remotion (`Reel.tsx`) → ffmpeg loudnorm | the Edits step (imported as one clip) |
+| `reel.json` → `overlay.mov` + `track.json` → `reel.mp4` | resolver → Remotion graphics only (ProRes 4444 alpha) + `track.mjs` (per-frame speaker y/zoom from `geometry.ts`) → `composite.mjs` (ffmpeg: original pixels moved/zoomed, graphics on top, loudnorm, camera colour tags) | the final reel (`~/Movies/Instaedits/<job>/final.mp4`) |
 | `screens/*.png` | `screens.mjs` (screencapture + Vision OCR redaction) | Screen cards |
 | `qa/contact.jpg` | `qa.mjs` | the reviewer model, the dashboard |
 
@@ -38,7 +38,8 @@ flowchart LR
 - `editor.mjs` — the Edits step as plain tool calls (no LLM): import the rendered reel, captions (≤3-word lines, Latin Hinglish, seam/full positions), music, SFX, a complete export preset. Never grades colour.
 - `captions.mjs` — caption line splits, split windows, caption placement, Devanagari→Latin fallback.
 - `screens.mjs` + `native/*.swift` — real Edits screenshots; tokens found by Apple Vision OCR, painted over, re-checked (fail closed).
-- `qa.mjs` — export vs render: duration, saturation (black-and-white guard), SSIM of every card at its time; contact sheet.
+- `composite.mjs` — the speaker is never re-rendered by the browser (that shifted colour 2-4 levels): ffmpeg moves/zooms the original pixels per the shared geometry and keeps full-range BT.709.
+- `qa.mjs` — export vs your ORIGINAL (colour drift ≤ 2.5 levels on untouched full-frame stretches) and vs render: duration, saturation (black-and-white guard), SSIM of every card at its time; contact sheet.
 - `references.mjs`, `netguard.mjs` — real Repo/Site visuals: the director only *proposes* `owner/name` / URL; this verifies them (GitHub API, headless-Chrome screenshot) behind an SSRF guard. Fetched data goes to Remotion only, never to an LLM.
 - `guardrails.mjs` — numeric limits the prompt can only ask for.
 - `prompts.mjs`, `catalog.mjs` — creative doctrine and the options verified to exist in the Edits app.

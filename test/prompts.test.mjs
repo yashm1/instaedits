@@ -11,12 +11,11 @@ test('director schema enums are exactly the verified catalog (incl. the Screen c
   assert.deepEqual(props.scenes.items.properties.kind.enum, C.SCENE_KINDS);
   assert.ok(C.SCENE_KINDS.includes('Screen'));
   assert.deepEqual(props.sfx.items.properties.name.enum, C.SFX);
-  assert.deepEqual(props.captions.properties.style.enum, C.CAPTION_STYLES);
   assert.deepEqual(props.music.properties.query.enum, C.MUSIC_QUERIES);
 });
 
 test('schema requires every section the resolver reads, and has NO grade (the camera colour is kept)', () => {
-  for (const k of ['scenes', 'zooms', 'sfx', 'captions', 'music']) assert.ok(P.DIRECTOR_SCHEMA.required.includes(k), k);
+  for (const k of ['scenes', 'zooms', 'sfx', 'music']) assert.ok(P.DIRECTOR_SCHEMA.required.includes(k), k);
   assert.ok(!('grade' in props), 'a grade instruction is what turned a video black and white');
   assert.match(P.DIRECTOR_SYSTEM, /COLOUR GRADE: none/);
   assert.ok(props.scenes.items.properties.word, 'cards can land on an exact spoken word');

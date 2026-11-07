@@ -57,12 +57,13 @@ test('the edit is plain tool calls: no colour grade is EVER applied (the black-a
   assert.ok(names(fake.calls).includes('getAdjustState'), 'it verifies the clip has no adjustments');
 });
 
-test('imports the finished reel, never re-times it, and exports to the staged path at 1080x1920 / 20 Mbit/s', async () => {
+test('imports the speaker clip, never re-times it, and exports (for its audio) to the staged path', async () => {
   const fake = fakeEdits();
   const { report } = await runEdit(opts(fake));
   const n = names(fake.calls);
-  assert.deepEqual(n.slice(0, 3), ['newProject', 'setAspectRatio', 'importMedia']);
-  assert.equal(fake.calls[2].args.path, '/stage/reel.mp4');
+  assert.deepEqual(n.slice(0, 4), ['newProject', 'setAspectRatio', 'setFrameRate', 'importMedia']);
+  assert.equal(fake.calls[2].args.fps, 30, 'the camera\'s frame rate (the app defaulted to a 60 fps export)');
+  assert.equal(fake.calls[3].args.path, '/stage/reel.mp4');
   for (const banned of ['trim', 'trimClip', 'split', 'splitClip', 'move', 'setSpeed', 'delete']) assert.ok(!n.includes(banned), banned);
   const es = fake.calls.find((c) => c.name === 'setExportSettings').args;
   assert.equal(es.resolution, '1080x1920'); assert.equal(es.bitrate, 20_000_000); assert.equal(es.frameRate, 30);
@@ -106,22 +107,12 @@ test('English captions are left as spoken (no transliteration call)', async () =
   assert.ok(!names(fake.calls).includes('editCaption'));
 });
 
-test('captions sit on the seam while a card shows (face stays clear), lower-middle otherwise', async () => {
+test('Edits never styles or positions captions (its picture is discarded); it RETURNS the Latin lines + timing', async () => {
   const fake = fakeEdits();
-  await runEdit(opts(fake));
-  const pos = Object.fromEntries(fake.calls.filter((c) => c.name === 'setTextPosition').map((c) => [c.args.id, c.args.y]));
-  const byStart = fake.caps().map((c) => [c.startTime, pos[c.id]]);
-  assert.deepEqual(byStart.map(([, y]) => y), [0.5, 0.5, 0.72], 'first two lines overlap the 0.1-2.6s card; the last does not');
-});
-
-test('captions use a readable style: an unreadable/unknown style from an older plan becomes Highlighter', async () => {
-  const fake = fakeEdits();
-  await runEdit(opts(fake));
-  assert.deepEqual(fake.calls.filter((c) => c.name === 'setCaptionStyle').map((c) => c.args.style), ['Highlighter']);
-  assert.ok(!fake.calls.some((c) => c.name === 'setCaptionHighlightColor'), 'white text on yellow was unreadable — keep the app default');
-  const f2 = fakeEdits();
-  await runEdit(opts(f2, { edl: { ...EDL, captions: { style: 'Default' } } }));
-  assert.equal(f2.calls.find((c) => c.name === 'setCaptionStyle').args.style, 'Default');
+  const { captions } = await runEdit(opts(fake, { transliterate: async (l) => l.map((x) => x.map((w) => (w === 'Claude' ? 'Claude' : 'w'))) }));
+  for (const banned of ['setCaptionStyle', 'setTextPosition', 'setCaptionHighlightColor']) assert.ok(!names(fake.calls).includes(banned), banned);
+  assert.deepEqual(captions.map((c) => [c.startTime, c.words.length]), [[0.1, 3], [fake.caps()[1].startTime, 2], [2.4, 2]]);
+  assert.ok(captions.every((c) => c.words.every((w) => !/\p{Script=Devanagari}/u.test(w))));
 });
 
 test('caption generation is retried on a transient (cloud) error', async () => {
