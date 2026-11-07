@@ -125,7 +125,8 @@ export async function tighten(video, segs, outFile, log, signal) {
   fs.writeFileSync(fg, parts.join(';') + ';' + cat);
   log(`${segs.length} segments → ffmpeg…`);
   await run('ffmpeg', ['-y', '-loglevel', 'error', '-i', video, '-filter_complex_script', fg, '-map', '[v]', '-map', '[a]',
-    '-c:v', 'libx264', '-crf', '15', '-preset', 'medium', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '256k', '-fps_mode', 'cfr', outFile], { signal });
+    // a LOCAL intermediate (re-encoded once more by the composite): near-lossless and fast beats small and slow
+    '-c:v', 'libx264', '-crf', '8', '-preset', 'veryfast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '320k', '-fps_mode', 'cfr', outFile], { signal });
 }
 
 /**
@@ -232,7 +233,7 @@ export function buildEdl(direction, words, cuts, log, sents = null, language = '
     if (latestEnd - start < want) start = Math.max(earliest, latestEnd - want);
     const dur = Math.min(s.dur, latestEnd - start);
     if (dur < MIN_CARD) { log(`⚠️ no room for ${s.id} (${dur.toFixed(1)}s) — dropped`); return; }
-    edl.scenes.push({ id: `s${edl.scenes.length + 1}`, was: s.id, anchor: s.anchor, ...(s.word ? { word: s.word } : {}), start: +start.toFixed(2), dur: +dur.toFixed(2), kind: s.kind, props: opening ? { ...s.props, opening: true } : s.props });
+    edl.scenes.push({ id: `s${edl.scenes.length + 1}`, was: s.id, anchor: s.anchor, ...(s.word ? { word: s.word } : {}), start: +start.toFixed(2), dur: +dur.toFixed(2), kind: s.kind, props: opening ? { ...s.props, opening: true } : s.props, ...(s.layout === 'full' ? { layout: 'full' } : {}) });
     prevEnd = start + dur;
   });
   // Zooms live only in talking-head gaps between cards. Snap to the nearest gap that fits, else drop.

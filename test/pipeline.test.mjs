@@ -295,3 +295,15 @@ test('mode: "reuse" by default, "fresh" accepted, anything else refused', () => 
     assert.throws(() => createJob({ script: 's', video: v, mode: 'yolo' }), /mode must be/);
   } finally { for (const j of [a, b]) fs.rmSync(j.dir, { recursive: true, force: true }); fs.rmSync(d, { recursive: true, force: true }); }
 });
+
+import { outputScale } from '../server/pipeline.mjs';
+test('outputScale: the output matches the camera — 1440x2560 → 4/3; never upscale; odd shapes stay 1080x1920', () => {
+  assert.equal(outputScale('1440x2560'), 1440 / 1080);
+  assert.ok(Number.isInteger(1920 * outputScale('1440x2560')), 'whole pixels: 2560, not 2559.94');
+  assert.equal(outputScale('1080x1920'), 1);
+  assert.equal(outputScale('720x1280'), 1, 'never upscale');
+  assert.equal(outputScale('2160x3840'), 2);
+  assert.equal(outputScale('4320x7680'), 2, 'capped');
+  assert.equal(outputScale('1920x1080'), 1, 'not 9:16');
+  assert.equal(outputScale(undefined), 1);
+});

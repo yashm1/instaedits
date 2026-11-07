@@ -129,3 +129,13 @@ test('references: a Site url is normalised to its canonical href (the key its fe
   assert.equal(direction.scenes.find((s) => s.id === 'r1').props.url, 'https://kafka.apache.org/');
   assert.equal(direction.scenes.find((s) => s.id === 'r2').props.url, 'https://redis.io/');
 });
+
+test('full-screen cards: at most 2 (extra ones shown split), each ≥ 2.5 s; anything but "full" means split', () => {
+  const d = base(); d.scenes = d.scenes.slice(0, 2);
+  d.scenes.push(...['f1', 'f2', 'f3'].map((id) => ({ id, anchor: 'x', dur: 1.8, kind: 'Stat', layout: 'full', props: { value: '9', label: 'x' } })), { id: 'w', anchor: 'x', dur: 3, kind: 'Stat', layout: 'weird', props: { value: '1', label: 'y' } });
+  const { direction, notes } = run(d);
+  const byId = Object.fromEntries(direction.scenes.map((s) => [s.id, s]));
+  assert.equal(byId.f1.layout, 'full'); assert.equal(byId.f2.layout, 'full'); assert.equal(byId.f3.layout, undefined);
+  assert.equal(byId.f1.dur, LIMITS.fullDurMin); assert.equal(byId.w.layout, undefined);
+  assert.ok(notes.some((n) => /f3: more than 2 full-screen cards/.test(n)));
+});

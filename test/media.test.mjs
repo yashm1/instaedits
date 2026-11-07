@@ -308,3 +308,9 @@ test('detectLanguage: Devanagari-dominant → hi; English/romanised → en; mixe
   assert.equal(detectLanguage([]), 'en');
   assert.equal(detectLanguage([W('99.99%', 0, 1)]), 'en');
 });
+
+test('buildEdl carries a full-screen layout to the EDL (and nothing for split cards)', () => {
+  const c = planCuts(HI, 12); const sents = sentences(HI, c.toOut);
+  const e = buildEdl(dir2([{ anchor: '#2' }, { anchor: '#4', layout: 'full' }]), HI, c, () => {}, sents, 'hi');
+  assert.equal(e.scenes[0].layout, undefined); assert.equal(e.scenes[1].layout, 'full');
+});

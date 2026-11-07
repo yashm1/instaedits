@@ -10,6 +10,7 @@ export const LIMITS = {
   cardDurMin: 1.5, cardDurMax: 5.5, // split layout: the speaker stays visible, so cards may hold longer
   keywordShare: 0.1, // ≤10% of spoken words may be emphasised
   hookWordsMax: 4, maxSameKindInRow: 2,
+  maxFullCards: 2, fullDurMin: 2.5, // full-screen cards hide the speaker: rare and readable
 };
 
 const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
@@ -53,6 +54,13 @@ export function applyGuardrails(input, { totalSeconds, scriptWordCount, screens 
     else s.props.url = new URL(s.props.url).href; // canonical form = the key the fetched assets are stored under
     refs++; return true;
   });
+  // full-screen cards: at most 2 (they hide the speaker), each long enough to read
+  let fulls = 0;
+  for (const s of d.scenes) {
+    if (s.layout !== 'full') { delete s.layout; continue; }
+    if (++fulls > LIMITS.maxFullCards) { notes.push(`card ${s.id}: more than ${LIMITS.maxFullCards} full-screen cards — shown split`); delete s.layout; continue; }
+    if (s.dur < LIMITS.fullDurMin) { notes.push(`card ${s.id}: full-screen card lengthened to ${LIMITS.fullDurMin}s`); s.dur = LIMITS.fullDurMin; }
+  }
   // a Hook backdrop must be a real captured screenshot — otherwise drop just the backdrop, keep the hook
   for (const s of d.scenes) if (s.kind === 'Hook' && s.props?.shot && !screens[s.props.shot]) { notes.push(`hook ${s.id}: backdrop "${s.props.shot}" not available — removed`); delete s.props.shot; }
   // Screen cards: only real captured shots; required props per kind (a malformed card would render blank)

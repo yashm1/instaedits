@@ -11,6 +11,7 @@ export {theme, safe};
 
 // paper, not glow: a soft contact shadow and a barely-there grain (an SVG noise tile, inline)
 const SHADOW = '0 1px 0 #0000000a, 0 12px 28px -14px #3a2f1f55';
+const FULL_ZOOM = 1.32; // type scale of a full-screen card relative to the split panel
 const SHADOW_BIG = '0 2px 0 #0000000d, 0 26px 60px -24px #3a2f1f66';
 const GRAIN = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="180" height="180"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" stitchTiles="stitch"/><feColorMatrix values="0 0 0 0 0.35  0 0 0 0 0.3  0 0 0 0 0.22  0 0 0 0.09 0"/></filter><rect width="100%" height="100%" filter="url(#n)"/></svg>')}")`;
 
@@ -46,7 +47,9 @@ const FitBox: React.FC<{children: React.ReactNode; maxH: number; align: 'center'
 const Stage: React.FC<{children: React.ReactNode; tag?: string; align?: 'center' | 'start'}> = ({children, tag, align = 'center'}) => {
   const f = useCurrentFrame();
   const t = f / 30;
-  const panel = React.useContext(PanelContext);
+  const ctx = React.useContext(PanelContext);
+  const panel = ctx && ctx.height < 1200 ? ctx : null; // a FULL-SCREEN card lays out with the full-frame safe zones
+  const full = !!ctx && ctx.height >= 1200;
   // panel: IG's top bar covers ~120px of the frame; keep the tag below it and leave a margin above the seam
   const z = panel ? {tagTop: 128, contentTop: 196, bottom: 54, side: 64} : {tagTop: safe.tagTop, contentTop: safe.contentTop, bottom: safe.bottom, side: 76};
   const H = panel ? panel.height : 1920;
@@ -61,7 +64,8 @@ const Stage: React.FC<{children: React.ReactNode; tag?: string; align?: 'center'
         </div>
       ) : null}
       <div style={{position: 'absolute', left: z.side, right: z.side, top: z.contentTop}}>
-        <FitBox maxH={H - z.contentTop - z.bottom} align={align}>{children}</FitBox>
+        {/* a FULL-SCREEN card has 2× the room: a bigger type scale (CSS zoom reflows, unlike transform); FitBox still guards overflow */}
+        <FitBox maxH={(H - z.contentTop - z.bottom) / (full ? FULL_ZOOM : 1)} align={align}><div style={full ? {zoom: FULL_ZOOM} : undefined}>{children}</div></FitBox>
       </div>
     </AbsoluteFill>
   );
@@ -87,7 +91,7 @@ const Icon: React.FC<{name?: IconName; size?: number; color?: string}> = ({name,
     <svg width={size} height={size} viewBox="0 0 48 48" fill="none" stroke={color} strokeWidth={3} strokeLinecap="round" strokeLinejoin="round">{ICONS[name]}</svg>
   ) : null;
 
-const usePanel = () => React.useContext(PanelContext) !== null;
+const usePanel = () => { const c = React.useContext(PanelContext); return c !== null && c.height < 1200; }; // split panel (not full screen)
 // ───────── motion toolkit: nothing on screen is static text ─────────
 /** A library icon that DRAWS ITSELF on (every stroke animates from 0 to full length), then settles. */
 const DrawIcon: React.FC<{name?: IconName; size?: number; color?: string; delay?: number; dur?: number}> = ({name, size = 120, color = theme.accent, delay = 0, dur = 18}) => {
@@ -186,10 +190,11 @@ export const Title: React.FC<{text: string; sub?: string; tag?: string}> = ({tex
 /** Vertical architecture flow with animated data packets. */
 export const Flow: React.FC<{title?: string; nodes: {label: string; note?: string; icon?: IconName}[]; highlight?: number | string; tag?: string}> = ({title, nodes, highlight, tag}) => {
   const f = useCurrentFrame();
-  const panel = React.useContext(PanelContext);
+  const panel = usePanel();
   // accept a node index OR its label (directors naturally write the label)
   const hi = typeof highlight === 'string' ? nodes.findIndex((n) => n.label.toLowerCase() === highlight.toLowerCase()) : highlight;
-  if (panel) return <FlowRow title={title} nodes={nodes} hi={hi} tag={tag} />;
+  // inside the reel every Flow uses the wide row/2×2 layout (split panel and full screen alike); the tall stack is standalone-only
+  if (panel || React.useContext(PanelContext)) return <FlowRow title={title} nodes={nodes} hi={hi} tag={tag} />;
   return (
     <Stage tag={tag}>
       <Heading text={title} />
