@@ -89,18 +89,31 @@ test('buildEdl: sfx are ≥0.8s apart and sorted', () => {
   for (let i = 1; i < e.sfx.length; i++) assert.ok(e.sfx[i].at - e.sfx[i - 1].at >= 0.8);
 });
 
-test('buildEdl: scene duration is clamped to leave room for the next card', () => {
+test('buildEdl: cards never overlap — in the split layout they may hand off with just a 0.1 s gap', () => {
   const c = planCuts(words, 11);
   const e = buildEdl(direction(), words, c, () => {});
-  for (let i = 0; i < e.scenes.length - 1; i++) assert.ok(e.scenes[i].start + e.scenes[i].dur <= e.scenes[i + 1].start - 0.4);
+  for (let i = 0; i < e.scenes.length - 1; i++) assert.ok(e.scenes[i].start + e.scenes[i].dur <= e.scenes[i + 1].start - 0.1 + 1e-9);
   assert.ok(e.scenes.at(-1).start + e.scenes.at(-1).dur <= e.duration + 1e-9);
 });
 
-test('buildEdl: a card anchored on the final words has no room and is dropped (logged)', () => {
+test('buildEdl: a card named in the last second (a CTA) starts earlier to get 2 s, instead of being dropped', () => {
+  const c = planCuts(words, 11);
+  const d = direction({ scenes: [{ id: 'z', anchor: 'uptime', dur: 2.5, kind: 'Stat', props: {} }] });
+  const e = buildEdl(d, words, c, () => {});
+  assert.equal(e.scenes.length, 1);
+  assert.ok(Math.abs(e.scenes[0].start + e.scenes[0].dur - c.total) < 0.011, 'ends with the video');
+  assert.ok(e.scenes[0].dur >= 2 - 1e-9);
+});
+
+test('buildEdl: a card is still dropped (logged) when even shifting cannot give it 1.2 s', () => {
   const c = planCuts(words, 11); const logs = [];
-  const d = direction({ scenes: [{ id: 'z', anchor: 'Result uptime', dur: 2, kind: 'Stat', props: {}, transition_in: 'transition_blur', transition_out: 'transition_blur' }] });
+  const d = direction({ scenes: [
+    { id: 'a', anchor: 'Ever wondered', dur: 4.5, kind: 'Hook', props: {} },
+    { id: 'b', anchor: 'Step one', dur: 4.5, kind: 'Stat', props: {} },
+    { id: 'c', anchor: 'client hits', dur: 2, kind: 'Stat', props: {} },
+  ] });
   const e = buildEdl(d, words, c, (m) => logs.push(m));
-  assert.equal(e.scenes.length, 0);
+  assert.ok(e.scenes.length < 3);
   assert.ok(logs.some((l) => /no room/.test(l)));
 });
 
@@ -137,8 +150,36 @@ test('buildEdl resolves "#N" anchors to the start of that sentence — language-
   assert.equal(e.language, 'hi');
   assert.equal(e.scenes.length, 3);
   assert.equal(e.scenes[0].start, 0.1, 'opening Hook still lands at 0.1s');
-  assert.ok(Math.abs(e.scenes[1].start - (sents[2].t - 0.08)) < 0.011);
-  assert.ok(Math.abs(e.scenes[2].start - (sents[4].t - 0.08)) < 0.011);
+  assert.ok(Math.abs(e.scenes[1].start - (sents[2].t - 0.2)) < 0.011, 'leads by 0.2 s so the split is open as the words are said');
+  assert.ok(Math.abs(e.scenes[2].start - Math.min(sents[4].t - 0.2, c.total - 2)) < 0.011, 'the last card may start earlier to get its 2 s');
+});
+
+test('a card with a "word" lands on that spoken word inside its sentence, not at the sentence start', () => {
+  const c = planCuts(HI, 12); const sents = sentences(HI, c.toOut);
+  assert.deepEqual([sents[1].i0, sents[1].i1], [2, 5], 'sentences carry their word range');
+  const e = buildEdl(dir2([{ anchor: '#2', word: 'Kafka' }, { anchor: '#4', word: 'तैयार' }]), HI, c, () => {}, sents, 'hi');
+  const kafka = HI.findIndex((w) => w.w === 'Kafka'), ready = HI.findIndex((w) => w.w === 'तैयार');
+  assert.ok(Math.abs(e.scenes[0].start - (c.toOut(HI[kafka].start) - 0.2)) < 0.011, 'Kafka card appears as "Kafka" is said');
+  assert.ok(Math.abs(e.scenes[1].start - (c.toOut(HI[ready].start) - 0.2)) < 0.011);
+  assert.ok(e.scenes[0].start > sents[1].t, 'later than the sentence start');
+  assert.equal(e.scenes[0].word, 'Kafka');
+});
+
+test('a "word" that is not in its sentence falls back to the sentence start (never jumps to another sentence)', () => {
+  const c = planCuts(HI, 12); const sents = sentences(HI, c.toOut);
+  const e = buildEdl(dir2([{ anchor: '#1', kind: 'Hook' }, { anchor: '#3', word: 'Kafka' }]), HI, c, () => {}, sents, 'hi');
+  assert.ok(Math.abs(e.scenes[1].start - (sents[2].t - 0.2)) < 0.011);
+});
+
+import { findWordIn } from '../server/media.mjs';
+test('findWordIn: exact match beats prefix; punctuation/case ignored; prefix needs ≥3 letters; range respected', () => {
+  const ws = ['Claude', 'Code,', 'Codex', 'and', 'Gemini.'].map((w) => ({ w }));
+  assert.equal(findWordIn(ws, 'codex', 0, 4), 2);
+  assert.equal(findWordIn(ws, 'Gemini', 0, 4), 4);
+  assert.equal(findWordIn(ws, 'Cod', 0, 4), 1, 'prefix match: first word that starts with it');
+  assert.equal(findWordIn(ws, 'an', 0, 4), -1, 'two letters are not enough for a prefix match');
+  assert.equal(findWordIn(ws, 'Claude', 1, 4), -1, 'outside the sentence range');
+  assert.equal(findWordIn(ws, '', 0, 4), -1);
 });
 
 test('"#N" anchors work for zooms and sfx too; unknown sentence numbers are dropped and logged', () => {

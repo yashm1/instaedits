@@ -6,13 +6,13 @@
 flowchart LR
   A[script + video] --> B[transcript<br/>Edits captions model]
   B --> C[cut dead air<br/>ffmpeg → tight.mp4]
-  C --> D[creative direction<br/>Opus · structured JSON]
+  C --> D[understand + direct<br/>Opus · structured JSON]
   D --> G[guardrails<br/>enforced limits]
   G --> E[resolve anchors<br/>→ edl.json]
-  E --> F[Remotion cards<br/>Sonnet writes Scenes.tsx → render]
-  F --> H[execute EDL in Edits<br/>Sonnet / Haiku via MCP]
-  E --> H
-  H --> I[final.mp4]
+  E --> H[Edits: captions → Hinglish, music, SFX<br/>plain tool calls — audio mix + caption timing]
+  H --> F[Remotion graphics + captions, alpha<br/>ffmpeg: ORIGINAL pixels underneath]
+  F --> Q[QA: colour vs original + vision review]
+  Q --> I[final.mp4]
 ```
 
 ## Contracts (the stable seams)
@@ -25,14 +25,21 @@ flowchart LR
 | `tight.mp4` + `cuts.json` | ffmpeg | the editor (never re-cut) |
 | `direction.json` | Opus, then guardrails | resolver |
 | `edl.json` | resolver (anchors → exact seconds) | edit prompt |
-| `scenes.json` → `Scenes.tsx` → `clips/sN.mp4` | resolver → Sonnet → Remotion | the editor |
+| `reel.json` → `overlay.mov` + `track.json` → `reel.mp4` | resolver → Remotion graphics only (ProRes 4444 alpha) + `track.mjs` (per-frame speaker y/zoom from `geometry.ts`) → `composite.mjs` (ffmpeg: original pixels moved/zoomed, graphics on top, loudnorm, camera colour tags) | the final reel (`~/Movies/Instaedits/<job>/final.mp4`) |
+| `screens/*.png` | `screens.mjs` (screencapture + Vision OCR redaction) | Screen cards |
+| `qa/contact.jpg` | `qa.mjs` | the reviewer model, the dashboard |
 
 ## Modules (`server/`)
 - `config.mjs` — every environment-specific value (models by role, caps, ports, canvas).
 - `pipeline.mjs` — job state, ordered steps, serial queue, resume, stale-job recovery.
 - `claude.mjs` — minimal `claude -p` runner (no skills/settings, scoped tools, USD cap, secrets via temp file).
 - `edits-mcp.mjs` — tiny MCP client so Node can call the Edits app with zero LLM tokens.
-- `media.mjs` — transcript math, dead-air cuts, anchor matching, EDL resolver.
+- `media.mjs` — transcript math, dead-air cuts, sentence + word anchor matching, EDL resolver.
+- `editor.mjs` — the Edits step as plain tool calls (no LLM): import the rendered reel, captions (≤3-word lines, Latin Hinglish, seam/full positions), music, SFX, a complete export preset. Never grades colour.
+- `captions.mjs` — caption line splits, split windows, caption placement, Devanagari→Latin fallback.
+- `screens.mjs` + `native/*.swift` — real Edits screenshots; tokens found by Apple Vision OCR, painted over, re-checked (fail closed).
+- `composite.mjs` — the speaker is never re-rendered by the browser (that shifted colour 2-4 levels): ffmpeg moves/zooms the original pixels per the shared geometry and keeps full-range BT.709.
+- `qa.mjs` — export vs your ORIGINAL (colour drift ≤ 2.5 levels on untouched full-frame stretches) and vs render: duration, saturation (black-and-white guard), SSIM of every card at its time; contact sheet.
 - `references.mjs`, `netguard.mjs` — real Repo/Site visuals: the director only *proposes* `owner/name` / URL; this verifies them (GitHub API, headless-Chrome screenshot) behind an SSRF guard. Fetched data goes to Remotion only, never to an LLM.
 - `guardrails.mjs` — numeric limits the prompt can only ask for.
 - `prompts.mjs`, `catalog.mjs` — creative doctrine and the options verified to exist in the Edits app.
@@ -42,7 +49,7 @@ flowchart LR
 Edits can only open and write folders it has access to. Everything it touches — source video, `tight.mp4`, rendered cards, the export — is hard-linked into `~/Movies/Instaedits/<job>/` (`server/staging.mjs`). `jobs/` is never handed to Edits.
 
 ## Why jobs run one at a time
-There is one Edits app to drive and one shared Remotion workspace (`remotion/src/Scenes.tsx`).
+There is one Edits app to drive (and the screenshot step brings it to the front).
 
 ## Extending
-New card → component + `LIBRARY.md` + `SCENE_KINDS` (tests catch drift). New pipeline step → add a `STEP_DEFS` entry and a `STEPS` function. Different models → `config.mjs` / env.
+New card → component in `lib/index.tsx` + the `KINDS` map in `Reel.tsx` + `LIBRARY.md` + `SCENE_KINDS` + `REQUIRED` props in guardrails (tests catch drift). New pipeline step → add a `STEP_DEFS` entry and a `STEPS` function. Different models → `config.mjs` / env.

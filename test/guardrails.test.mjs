@@ -5,9 +5,9 @@ import { applyGuardrails, LIMITS } from '../server/guardrails.mjs';
 const base = () => ({
   scenes: [
     { id: 'a1', anchor: 'x', dur: 2, kind: 'Hook', props: { text: 'Instagram handles millions of likes daily', hot: ['millions', 'daily'] } },
-    { id: 'a2', anchor: 'y', dur: 9, kind: 'Flow', props: {} },
-    { id: 'a3', anchor: 'z', dur: 0.4, kind: 'Flow', props: {} },
-    { id: 'a4', anchor: 'w', dur: 2, kind: 'Flow', props: {} },
+    { id: 'a2', anchor: 'y', dur: 9, kind: 'Flow', props: { nodes: [{ label: 'A' }, { label: 'B' }] } },
+    { id: 'a3', anchor: 'z', dur: 0.4, kind: 'Flow', props: { nodes: [{ label: 'A' }, { label: 'B' }] } },
+    { id: 'a4', anchor: 'w', dur: 2, kind: 'Flow', props: { nodes: [{ label: 'A' }, { label: 'B' }] } },
   ],
   zooms: [{ anchor: 'q', dur: 5, scale: 1.5 }, { anchor: 'r', dur: 0.1, scale: 1.0 }],
   sfx: Array.from({ length: 10 }, (_, i) => ({ name: i === 3 || i === 4 ? 'Riser (sharp)' : 'Whoosh (sharp)', volume: 0.9, on_scene: 'a1', edge: i % 2 ? 'out' : 'in' })),
@@ -21,7 +21,7 @@ test('does not mutate its input', () => {
   assert.equal(JSON.stringify(d), snap);
 });
 
-test('card duration clamped to [1.5, 4.5]', () => {
+test('card duration clamped to [1.5, 5.5] (split layout: the speaker stays visible)', () => {
   const { direction } = run();
   for (const s of direction.scenes) assert.ok(s.dur >= LIMITS.cardDurMin && s.dur <= LIMITS.cardDurMax);
 });
@@ -60,9 +60,21 @@ test('sfx cap has a floor for very short videos', () => {
   assert.equal(direction.sfx.length, LIMITS.sfxFloor);
 });
 
-test('caption keywords capped at 10% of script words (min 3)', () => {
-  assert.equal(run().direction.captions.keywords.length, 8);
-  assert.equal(run(base(), { scriptWordCount: 10 }).direction.captions.keywords.length, 3);
+test('Screen cards survive only for screenshots that were actually captured; their sfx go with them', () => {
+  const d = base(); d.scenes.push({ id: 's1', anchor: 'x', dur: 3, kind: 'Screen', props: { shot: 'edits-automation' } }, { id: 's2', anchor: 'x', dur: 3, kind: 'Screen', props: { shot: 'made-up' } });
+  d.sfx = [{ name: 'Whoosh (sharp)', volume: 0.3, on_scene: 's2', edge: 'in' }];
+  const { direction, notes } = run(d, { screens: { 'edits-automation': {} } });
+  assert.deepEqual(direction.scenes.filter((s) => s.kind === 'Screen').map((s) => s.id), ['s1']);
+  assert.ok(notes.some((n) => /s2 dropped: screenshot "made-up" is not available/.test(n)));
+  assert.equal(direction.sfx.length, 0);
+  assert.equal(run(d).direction.scenes.filter((s) => s.kind === 'Screen').length, 0, 'no screens captured → no Screen cards');
+});
+
+test('cards missing a prop their component needs are dropped (they would render blank)', () => {
+  const d = base(); d.scenes.push({ id: 'b1', anchor: 'x', dur: 3, kind: 'Flow', props: { nodes: [] } }, { id: 'b2', anchor: 'x', dur: 3, kind: 'Stat', props: { value: '99%' } });
+  const { direction, notes } = run(d);
+  assert.ok(!direction.scenes.some((s) => ['b1', 'b2'].includes(s.id)));
+  assert.ok(notes.some((n) => /b1 dropped: missing nodes/.test(n)) && notes.some((n) => /b2 dropped: missing label/.test(n)));
 });
 
 test('music never louder than 0.16 and ducks to ≤0.6x', () => {
@@ -73,7 +85,7 @@ test('music never louder than 0.16 and ducks to ≤0.6x', () => {
 
 test('a well-behaved direction passes through without notes', () => {
   const d = {
-    scenes: [{ id: 'a1', anchor: 'x', dur: 2, kind: 'Hook', props: { text: 'Millions of likes' } }, { id: 'a2', anchor: 'y', dur: 3, kind: 'Flow', props: {} }],
+    scenes: [{ id: 'a1', anchor: 'x', dur: 2, kind: 'Hook', props: { text: 'Millions of likes' } }, { id: 'a2', anchor: 'y', dur: 3, kind: 'Flow', props: { nodes: [{ label: 'A' }, { label: 'B' }] } }],
     zooms: [{ anchor: 'q', dur: 1, scale: 1.1 }], sfx: [{ name: 'Whoosh (sharp)', volume: 0.3 }, { name: 'Riser (sharp)', volume: 0.28 }],
     captions: { style: 'Short Pop', highlightColor: '#FFD84D', keywords: ['Kafka', 'Cassandra', 'uptime'] },
     music: { query: 'minimal tech', volume: 0.12, duckedVolume: 0.066, fadeIn: 0.6, fadeOut: 1.2 },
@@ -86,10 +98,13 @@ import { config } from '../server/config.mjs';
 const refScene = (id, kind, props) => ({ id, anchor: 'x', dur: 3, kind, props });
 const withRefs = (...scenes) => { const d = base(); d.scenes = [d.scenes[0], ...scenes]; d.sfx = []; return d; };
 
-test('references: valid Repo/Site cards pass; a github.com URL is normalised to owner/name', () => {
-  const { direction, notes } = run(withRefs(refScene('r1', 'Repo', { repo: 'https://github.com/apache/kafka' }), refScene('r2', 'Site', { url: 'https://kafka.apache.org' })));
-  assert.equal(direction.scenes.find((s) => s.id === 'r1').props.repo, 'apache/kafka');
+test('references: a GitHub repo is shown as its REAL repo page (Repo card → Site screenshot of github.com/owner/name)', () => {
+  const { direction, notes } = run(withRefs(refScene('r1', 'Repo', { repo: 'https://github.com/apache/kafka', tag: 'STEP 2/3' }), refScene('r2', 'Site', { url: 'https://kafka.apache.org' })));
+  const r1 = direction.scenes.find((s) => s.id === 'r1');
+  assert.equal(r1.kind, 'Site');
+  assert.deepEqual(r1.props, { url: 'https://github.com/apache/kafka', name: 'apache/kafka', tag: 'STEP 2/3' });
   assert.ok(direction.scenes.some((s) => s.id === 'r2'));
+  assert.ok(notes.some((n) => /apache\/kafka shown as its real page screenshot/.test(n)));
   assert.ok(!notes.some((n) => /dropped/.test(n)));
 });
 
@@ -105,7 +120,7 @@ test('references: malformed repos and non-https URLs are dropped with a note, an
 test('references are capped at config.maxReferenceCards', () => {
   const many = Array.from({ length: config.maxReferenceCards + 2 }, (_, i) => refScene(`r${i}`, 'Repo', { repo: `o/r${i}` }));
   const { direction, notes } = run(withRefs(...many));
-  assert.equal(direction.scenes.filter((s) => s.kind === 'Repo').length, config.maxReferenceCards);
+  assert.equal(direction.scenes.filter((s) => s.kind === 'Site').length, config.maxReferenceCards, 'repos become page screenshots, still capped');
   assert.equal(notes.filter((n) => /reference limit/.test(n)).length, 2);
 });
 

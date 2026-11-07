@@ -9,6 +9,7 @@ Instaedits is a **local, single-user** tool. It binds to `127.0.0.1`, drives pai
 - Secrets must not leak → the token lives in `.env.local` (gitignored) and reaches `claude` through a 0600 temp file, never on the command line or in logs.
 - A URL suggested by a model must not reach your machine or LAN → every Repo/Site URL passes an SSRF guard (https only, default port, public hostnames only, **all** DNS answers checked, redirects re-checked) before and after navigation; this protects the Edits MCP server on `127.0.0.1`, routers and cloud-metadata endpoints.
 - A web page must not be able to instruct the pipeline → fetched text and images are passed only to Remotion as data and **never to an LLM**; image fetches are size-capped and type-checked.
+- Screenshots of the Edits app must not leak the Automation access token → every capture is OCR'd on-device (Apple Vision), any token-like text (and the line under an "Access token" heading) is painted over, the result is OCR'd **again**, and the file is deleted if anything token-like is still readable (fail closed). Screenshots live in `screens/` (gitignored) and are never sent to a model; the QA reviewer sees only frames of your exported video.
 - Requests must not escape `jobs/` → job ids are validated, video paths must be absolute files with a known extension, budgets are capped.
 
 ## Known residual risks

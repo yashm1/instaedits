@@ -5,7 +5,7 @@ import { buildArgs, MODELS } from '../server/claude.mjs';
 const has = (a, flag, val) => { const i = a.indexOf(flag); assert.ok(i >= 0, `${flag} missing`); if (val !== undefined) assert.equal(a[i + 1], val); };
 
 test('models are the Claude 5.5 family', () => {
-  assert.deepEqual(MODELS, { opus: 'claude-opus-5-5', sonnet: 'claude-sonnet-5-5', haiku: 'claude-haiku-5-5' });
+  assert.deepEqual(MODELS, { opus: 'claude-opus-5-5', sonnet: 'claude-sonnet-5-5' }); // Haiku is gone: no model drives the editor any more
 });
 
 test('every call is minimal: no skills, no session, strict MCP, budget cap, explicit tools', () => {

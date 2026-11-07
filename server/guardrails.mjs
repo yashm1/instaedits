@@ -7,17 +7,24 @@ export const LIMITS = {
   musicMax: 0.16, duckRatio: 0.6,
   sfxMin: 0.15, sfxMax: 0.45, sfxPerSeconds: 6, sfxFloor: 2,
   zoomMin: 1.06, zoomMax: 1.14, zoomDurMin: 0.6, zoomDurMax: 1.8,
-  cardDurMin: 1.5, cardDurMax: 4.5,
+  cardDurMin: 1.5, cardDurMax: 5.5, // split layout: the speaker stays visible, so cards may hold longer
   keywordShare: 0.1, // ≤10% of spoken words may be emphasised
   hookWordsMax: 4, maxSameKindInRow: 2,
 };
 
 const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
 const isHttps = (u) => { try { return new URL(String(u)).protocol === 'https:'; } catch { return false; } };
+const REQUIRED = { Hook: ['text'], Title: ['text'], Flow: ['nodes'], Fanout: ['from', 'to'], Steps: ['steps'], Chart: ['bars'], Code: ['code'], Stat: ['value', 'label'], Bullets: ['items'], Compare: ['left', 'right'], Repo: ['repo'], Site: ['url'], Screen: ['shot'] };
+/** Reason string if a card lacks a prop its component needs (or a list prop is empty), else null. */
+export function missingProps(s) {
+  const p = s.props ?? {};
+  const miss = (REQUIRED[s.kind] ?? []).filter((k) => p[k] == null || p[k] === '' || (Array.isArray(p[k]) && !p[k].length));
+  return miss.length ? `missing ${miss.join(', ')}` : null;
+}
 const words = (t) => String(t ?? '').trim().split(/\s+/).filter(Boolean);
 
 /** Returns { direction, notes } — a corrected deep copy plus a human-readable list of what was changed/flagged. */
-export function applyGuardrails(input, { totalSeconds, scriptWordCount }) {
+export function applyGuardrails(input, { totalSeconds, scriptWordCount, screens = {} }) {
   const d = structuredClone(input), notes = [];
   const L = LIMITS;
 
@@ -26,6 +33,14 @@ export function applyGuardrails(input, { totalSeconds, scriptWordCount }) {
     const dur = clamp(s.dur, L.cardDurMin, L.cardDurMax);
     if (dur !== s.dur) notes.push(`card ${s.id}: duration ${s.dur}s → ${dur}s`);
     return { ...s, dur };
+  });
+  // GitHub repos are shown as the REAL repo page (a screenshot), not a stats card: the creator asked for the actual page,
+  // and a young repo's "★ 0" weakens the proof. A Repo card becomes a Site card for https://github.com/owner/name.
+  d.scenes = d.scenes.map((s) => {
+    if (s.kind !== 'Repo' || !parseRepo(s.props?.repo)) return s;
+    const repo = parseRepo(s.props.repo);
+    notes.push(`card ${s.id}: GitHub repo ${repo} shown as its real page screenshot`);
+    return { ...s, kind: 'Site', props: { url: `https://github.com/${repo}`, name: repo, tag: s.props.tag ?? 'GITHUB' } };
   });
   // real-world references: valid shape only, capped; anything dropped here also loses its attached sfx
   const droppedIds = new Set(); let refs = 0;
@@ -37,6 +52,12 @@ export function applyGuardrails(input, { totalSeconds, scriptWordCount }) {
     if (s.kind === 'Repo') s.props.repo = parseRepo(s.props.repo); // normalise (accepts a github.com URL)
     else s.props.url = new URL(s.props.url).href; // canonical form = the key the fetched assets are stored under
     refs++; return true;
+  });
+  // Screen cards: only real captured shots; required props per kind (a malformed card would render blank)
+  d.scenes = d.scenes.filter((s) => {
+    const why = s.kind === 'Screen' && !screens[s.props?.shot] ? `screenshot "${s.props?.shot}" is not available` : missingProps(s);
+    if (why) { notes.push(`${s.kind} card ${s.id} dropped: ${why}`); droppedIds.add(s.id); return false; }
+    return true;
   });
   d.sfx = (d.sfx ?? []).filter((x) => !droppedIds.has(x.on_scene));
   const first = d.scenes[0];
@@ -68,12 +89,6 @@ export function applyGuardrails(input, { totalSeconds, scriptWordCount }) {
     sfx = sfx.filter((x) => keep.has(x));
   }
   d.sfx = sfx;
-
-  // captions: ≤10% of words emphasised
-  if (d.captions) {
-    const max = Math.max(3, Math.floor(scriptWordCount * L.keywordShare));
-    if (d.captions.keywords.length > max) { notes.push(`caption keywords ${d.captions.keywords.length} → ${max} (≤10% of words)`); d.captions.keywords = d.captions.keywords.slice(0, max); }
-  }
 
   // music: must sit well under the voice
   if (d.music) {

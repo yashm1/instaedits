@@ -8,20 +8,22 @@ import { MODELS } from '../server/claude.mjs';
 import { SCENE_KINDS } from '../server/catalog.mjs';
 
 test('step order is fixed and creative decisions precede execution', () => {
-  assert.deepEqual(STEP_DEFS('high').map((s) => s.key), ['probe', 'transcribe', 'tighten', 'translate', 'direction', 'assets', 'resolve', 'codegen', 'render', 'edit', 'verify']);
+  assert.deepEqual(STEP_DEFS('high').map((s) => s.key), ['probe', 'transcribe', 'tighten', 'translate', 'direction', 'assets', 'resolve', 'edit', 'render', 'verify']);
 });
 
-test('models: Opus directs, Sonnet codes, Sonnet/Haiku edit by quality', () => {
+test('models: Opus directs; rendering is local; the Edits edit is plain tool calls (a model only writes Hinglish)', () => {
   const m = (q, k) => STEP_DEFS(q).find((s) => s.key === k).model;
   assert.equal(m('high', 'direction'), MODELS.opus);
-  assert.equal(m('high', 'codegen'), MODELS.sonnet);
-  assert.equal(m('high', 'edit'), MODELS.sonnet);
-  assert.equal(m('fast', 'edit'), MODELS.haiku);
+  assert.match(m('high', 'render'), /^local/);
+  assert.match(m('high', 'edit'), /^local \(Edits tool calls\)/);
+  assert.ok(m('high', 'edit').includes(config.models.captions));
+  assert.ok(m('high', 'verify').includes(config.models.reviewer), 'full QA: a model watches the export');
+  assert.equal(m('fast', 'verify'), 'local (ffmpeg)');
 });
 
-test('only translate, direction, codegen and edit use an LLM', () => {
-  const llm = STEP_DEFS('high').filter((s) => /claude/.test(s.model)).map((s) => s.key);
-  assert.deepEqual(llm, ['translate', 'direction', 'codegen', 'edit']);
+test('no step generates code with an LLM any more (the reel is rendered from data)', () => {
+  assert.ok(!STEP_DEFS('high').some((s) => s.key === 'codegen'));
+  assert.ok(!fs.existsSync('remotion/src/Scenes.default.tsx'));
 });
 
 test('createJob validates input before touching disk', () => {
@@ -33,9 +35,10 @@ test('createJob sets budgets by quality and creates the job dir', () => {
   const id = `test-${Date.now()}`;
   const j = createJob({ script: 'hello', video: v, quality: 'fast', jobId: id });
   try {
-    assert.equal(j.state.budgets.edit, 1.5);
+    assert.equal(j.state.budgets.captions, config.budgets.captions);
     assert.ok(fs.existsSync(path.join(j.dir, 'state.json')));
-    assert.equal(j.state.steps.length, 11);
+    assert.equal(j.state.steps.length, 10);
+    assert.deepEqual(j.state.terms, config.defaultTerms, 'no Terms → the default glossary');
   } finally { fs.rmSync(j.dir, { recursive: true, force: true }); fs.rmSync(tmp, { recursive: true, force: true }); }
 });
 
@@ -48,8 +51,17 @@ test('library docs and catalog cannot drift from the real Remotion components', 
   }
 });
 
+test('every card kind the director may pick is rendered by Reel.tsx and has required-prop rules', async () => {
+  const reel = fs.readFileSync('remotion/src/Reel.tsx', 'utf8');
+  const kinds = reel.match(/const KINDS[^=]*= \{([^}]*)\}/)[1].split(',').map((x) => x.trim()).filter(Boolean);
+  const g = fs.readFileSync('server/guardrails.mjs', 'utf8');
+  for (const k of SCENE_KINDS) {
+    assert.ok(kinds.includes(k), `${k} missing from Reel.tsx KINDS (it would silently render nothing)`);
+    assert.match(g, new RegExp(`\\b${k}: \\[`), `${k} missing from REQUIRED in guardrails`);
+  }
+});
+
 test('Remotion library typechecks (catches prop-type drift before a render does)', { timeout: 120000 }, () => {
-  if (!fs.existsSync('remotion/src/Scenes.tsx')) fs.copyFileSync('remotion/src/Scenes.default.tsx', 'remotion/src/Scenes.tsx');
   execFileSync('npx', ['tsc', '--noEmit'], { cwd: 'remotion', stdio: 'pipe' });
 });
 
@@ -64,8 +76,8 @@ test('createJob rejects traversal ids, bad quality, unknown or oversized budgets
   try {
     assert.throws(() => createJob({ script: 's', video: v, jobId: '../../evil' }), /invalid job id/);
     assert.throws(() => createJob({ script: 's', video: v, quality: 'ultra' }), /quality/);
-    assert.throws(() => createJob({ script: 's', video: v, budgets: { edit: 999 } }), /between 0 and/);
-    assert.throws(() => createJob({ script: 's', video: v, budgets: { edit: -1 } }), /between 0 and/);
+    assert.throws(() => createJob({ script: 's', video: v, budgets: { review: 999 } }), /between 0 and/);
+    assert.throws(() => createJob({ script: 's', video: v, budgets: { captions: -1 } }), /between 0 and/);
     assert.throws(() => createJob({ script: 's', video: v, budgets: { evil: 1 } }), /unknown budget/);
     assert.throws(() => createJob({ script: 5, video: v }), /script must be text/);
     assert.throws(() => createJob({ script: 's', video: v, language: 'Hindi' }), /language must be/);
@@ -78,20 +90,26 @@ test('createJob rejects traversal ids, bad quality, unknown or oversized budgets
 
 test('createJob honours valid budget overrides but keeps other defaults', () => {
   const { d, v } = tmpVideo(); const id = `t-${Date.now()}`;
-  const j = createJob({ script: 's', video: v, jobId: id, budgets: { edit: 0.25 } });
+  const j = createJob({ script: 's', video: v, jobId: id, budgets: { review: 0.25 } });
   try {
-    assert.equal(j.state.budgets.edit, 0.25);
+    assert.equal(j.state.budgets.review, 0.25);
     assert.equal(j.state.budgets.direction, config.budgets.direction);
     assert.equal(j.state.status, 'queued');
   } finally { fs.rmSync(j.dir, { recursive: true, force: true }); fs.rmSync(d, { recursive: true, force: true }); }
 });
 
-test('budgets by quality come from config', () => {
+test('budgets come from config; links and terms are validated and normalised', () => {
   const { d, v } = tmpVideo();
-  const a = createJob({ script: 's', video: v, quality: 'high', jobId: `th-${Date.now()}` });
-  const b = createJob({ script: 's', video: v, quality: 'fast', jobId: `tf-${Date.now()}` });
-  try { assert.equal(a.state.budgets.edit, config.budgets.editHigh); assert.equal(b.state.budgets.edit, config.budgets.editFast); }
-  finally { for (const j of [a, b]) fs.rmSync(j.dir, { recursive: true, force: true }); fs.rmSync(d, { recursive: true, force: true }); }
+  const a = createJob({ script: 's', video: v, jobId: `th-${Date.now()}`, links: 'yashm1/instaedits, https://remotion.dev', terms: 'Kafka,  Redis' });
+  try {
+    assert.deepEqual(a.state.budgets, config.budgets);
+    assert.deepEqual(a.state.links, ['https://github.com/yashm1/instaedits', 'https://remotion.dev']);
+    assert.deepEqual(a.state.terms, ['Kafka', 'Redis']);
+    assert.throws(() => createJob({ script: 's', video: v, links: ['http://insecure.example'] }), /https URL/);
+    assert.throws(() => createJob({ script: 's', video: v, links: ['javascript:alert(1)'] }), /https URL/);
+    assert.throws(() => createJob({ script: 's', video: v, links: Array(6).fill('https://a.dev') }), /at most 5/);
+    assert.throws(() => createJob({ script: 's', video: v, terms: ['x'.repeat(41)] }), /at most 30 terms/);
+  } finally { fs.rmSync(a.dir, { recursive: true, force: true }); fs.rmSync(d, { recursive: true, force: true }); }
 });
 
 test('runJob/startJob refuse unknown steps; resumeJob refuses bad ids, missing jobs', async () => {
@@ -177,7 +195,7 @@ test('assets step: skipped (and stale files removed) when nothing is referenced'
   const job = mkJobDir({ scenes: [sc('a1', 'Hook', {})] }, { 'assets.json': { repos: {} }, 'references.json': {} });
   try {
     const r = await STEPS_FOR_TEST().assets(job, { log: [] }, () => {});
-    assert.match(r.skipped, /no tool or GitHub repo/);
+    assert.match(r.skipped, /no tool, repo or screenshot/);
     assert.ok(!fs.existsSync(path.join(job.dir, 'assets.json')) && !fs.existsSync(path.join(job.dir, 'references.json')));
     assert.deepEqual(job.state.references, []);
   } finally { fs.rmSync(job.dir, { recursive: true, force: true }); }
@@ -213,9 +231,10 @@ test('resolve: a reference card is kept only when its visuals were verified; oth
     assert.deepEqual(edl.scenes.map((s) => s.kind), ['Hook', 'Repo']);
     assert.ok(logs.some((l) => /dropped Site card a3: navigation timed out/.test(l)));
     assert.equal(edl.sfx.length, 0, 'sfx attached to a dropped card disappears with it');
-    const sj = JSON.parse(fs.readFileSync(path.join(job.dir, 'scenes.json'), 'utf8'));
-    assert.deepEqual(sj.scenes.map((s) => s.kind), ['Hook', 'Repo']);
-    assert.ok(!JSON.stringify(sj).includes('stars'), 'fetched data never enters scenes.json (the file the code-gen LLM reads)');
+    const reel = JSON.parse(fs.readFileSync(path.join(job.dir, 'reel.json'), 'utf8'));
+    assert.deepEqual(reel.scenes.map((s) => s.kind), ['Hook', 'Repo'], 'Remotion renders exactly the EDL');
+    assert.deepEqual(reel.scenes.map((s) => s.start), edl.scenes.map((s) => s.start), 'same seconds as the EDL — nothing re-times them');
+    assert.equal(reel.video, 'tight.mp4');
   } finally { fs.rmSync(job.dir, { recursive: true, force: true }); }
 });
 
@@ -241,12 +260,12 @@ test('migrateSteps inserts steps added after the job was created, in canonical o
   assert.ok(legacy.steps.filter((x) => !['assets', 'translate'].includes(x.key)).every((x) => x.status === 'done' && x.cost === 0.5), 'existing results untouched');
 });
 
-test('migrateSteps is a no-op for an up-to-date job and keeps unknown legacy steps at the end', () => {
+test('migrateSteps is a no-op for an up-to-date job and DROPS steps that no longer exist (e.g. codegen)', () => {
   const state = { quality: 'fast', steps: STEP_DEFS('fast').map((d) => ({ ...d, status: 'done', log: [], cost: 0, tokens: { in: 0, out: 0 } })) };
   assert.equal(migrateSteps(state), false);
-  state.steps.push({ key: 'old-step', title: 'gone', status: 'done', log: [], cost: 0, tokens: { in: 0, out: 0 } });
-  migrateSteps(state);
-  assert.equal(state.steps.at(-1).key, 'old-step');
+  state.steps.splice(7, 0, { key: 'codegen', title: 'gone', status: 'done', log: [], cost: 0, tokens: { in: 0, out: 0 } });
+  assert.equal(migrateSteps(state), true);
+  assert.deepEqual(state.steps.map((x) => x.key), STEP_DEFS('fast').map((x) => x.key), 'resuming must never hit a step with no implementation');
 });
 
 test('resumeJob migrates a legacy job so the new step actually runs', () => {

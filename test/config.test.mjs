@@ -6,9 +6,9 @@ import { config } from '../server/config.mjs';
 import { canvas } from '../remotion/src/lib/theme.ts';
 
 test('defaults: models by role, localhost-only server, sane budgets', () => {
-  assert.deepEqual(config.models, { director: 'claude-opus-5-5', coder: 'claude-sonnet-5-5', translator: 'claude-sonnet-5-5', editorHigh: 'claude-sonnet-5-5', editorFast: 'claude-haiku-5-5' });
+  assert.deepEqual(config.models, { director: 'claude-opus-5-5', translator: 'claude-sonnet-5-5', captions: 'claude-sonnet-5-5', reviewer: 'claude-sonnet-5-5' });
   assert.equal(config.server.host, '127.0.0.1');
-  assert.ok(config.budgetCeiling >= config.budgets.editHigh);
+  assert.ok(config.budgetCeiling >= Math.max(...Object.values(config.budgets)));
   for (const v of Object.values(config.budgets)) assert.ok(v > 0 && v <= config.budgetCeiling);
 });
 
@@ -33,4 +33,10 @@ test('.env.example documents every env override config.mjs reads', () => {
   const src = fs.readFileSync('server/config.mjs', 'utf8');
   const ex = fs.readFileSync('.env.example', 'utf8');
   for (const name of new Set([...src.matchAll(/env\.([A-Z_]+)/g)].map((m) => m[1]))) assert.ok(ex.includes(name), `${name} missing from .env.example`);
+});
+
+test('default glossary includes the names speech recognition mishears on this channel (Remotion → "emotion")', () => {
+  for (const t of ['Remotion', 'Claude Code', 'Codex', 'Gemini']) assert.ok(config.defaultTerms.includes(t), t);
+  const out = execFileSync('node', ['-e', "import('./server/config.mjs').then(m=>console.log(JSON.stringify(m.config.defaultTerms)))"], { env: { ...process.env, INSTAEDITS_TERMS: 'Kafka, Redis ,' }, encoding: 'utf8' });
+  assert.deepEqual(JSON.parse(out), ['Kafka', 'Redis']);
 });

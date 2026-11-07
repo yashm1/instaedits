@@ -60,10 +60,10 @@ test('local-only and generated files are never tracked', () => {
   const files = tracked();
   for (const f of files) {
     assert.ok(!/(^|\/)\.env\.local$/.test(f), f);
-    assert.ok(!f.startsWith('jobs/') && !f.includes('node_modules/') && f !== 'remotion/src/Scenes.tsx', f);
+    assert.ok(!f.startsWith('jobs/') && !f.startsWith('screens/') && !f.includes('node_modules/'), f);
   }
   const ig = read('.gitignore');
-  for (const p of ['.env.local', 'jobs/', 'node_modules/', 'remotion/src/Scenes.tsx']) assert.ok(ig.includes(p), p);
+  for (const p of ['.env.local', 'jobs/', 'node_modules/', 'screens/']) assert.ok(ig.includes(p), p); // screens/: even redacted, app screenshots are personal
 });
 
 test('images stay repo-friendly: <2.5 MB each, <6 MB total', () => {
@@ -91,11 +91,11 @@ test('README stays in sync with the code it documents', async () => {
   for (const script of ['setup', 'start', 'test']) assert.ok(pkg.scripts[script], `npm script ${script}`);
   assert.match(md, /npm run setup/); assert.match(md, /npm start/);
   assert.ok(md.includes(`direction $${config.budgets.direction}`));
-  assert.ok(md.includes(`$${config.budgets.editFast}`) && md.includes(`$${config.budgets.editHigh}`));
+  assert.ok(md.includes(`$${config.budgets.captions}`) && md.includes(`$${config.budgets.review}`));
 });
 
 test('the rules table does not overclaim: prompt-only rules are labelled as such', () => {
   const md = read('README.md');
-  assert.match(md, /Instruction to the editor model/);
+  assert.match(md, /Instruction to the director/);
   assert.match(md, /three-of-a-kind in a row is \*flagged\*, not fixed/);
 });

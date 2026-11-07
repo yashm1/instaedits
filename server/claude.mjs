@@ -5,7 +5,7 @@ import path from 'node:path';
 import { config } from './config.mjs';
 
 // Roles → model ids live in config.mjs. Keys kept for readability at call sites.
-export const MODELS = { opus: config.models.director, sonnet: config.models.coder, haiku: config.models.editorFast };
+export const MODELS = { opus: config.models.director, sonnet: config.models.translator };
 
 const NO_MCP = '{"mcpServers":{}}';
 
