@@ -70,5 +70,5 @@ $('run').onclick=async()=>{$('msg').textContent='';try{
 window.resume=async from=>{await post('/api/resume/'+cur,{from});watch(cur)};
 async function loadJobs(){const js=await (await fetch('/api/jobs')).json();
   $('jobs').innerHTML=js.slice(0,6).map(j=>`<div class="row" style="margin:4px 0"><a href="#" onclick="watch('${j.id}');return false" style="color:var(--acc)">${j.id}</a><span class="m">${j.status}</span></div>`).join('')||'<div class="m">none</div>'}
-loadJobs();setInterval(()=>{if(cur&&es)document.querySelectorAll('.running .pill').length&&0},1000);
+loadJobs();if(location.hash.length>1)watch(decodeURIComponent(location.hash.slice(1)));setInterval(()=>{if(cur&&es)document.querySelectorAll('.running .pill').length&&0},1000);
 </script></body></html>
