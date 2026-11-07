@@ -114,3 +114,11 @@ test('review prompt: points at the contact sheet, lists what is said at each fra
 test('no prompt asks a model to write code or drive the editor any more', () => {
   for (const k of ['codegenPrompt', 'repairPrompt', 'editPrompt', 'editSystem']) assert.ok(!(k in P), k);
 });
+
+test('a fresh take shows the director earlier takes and demands a different angle, hook and cards', () => {
+  const p = P.directorPrompt({ sentences: [{ n: 1, t: 0, text: 'x' }], duration: 5, library: 'L', previousTakes: [{ concept: 'Proof-first reveal', hook: 'Claude edited this', cards: ['Hook: Claude edited this', 'Screen'] }] });
+  assert.match(p, /PREVIOUS TAKES of this same video/); assert.match(p, /Do NOT repeat them/); assert.match(p, /different opening hook/);
+  assert.match(p, /Take 1: concept "Proof-first reveal" · hook "Claude edited this" · cards: Hook: Claude edited this \| Screen/);
+  assert.match(p, /Keep every fact true to the speech/);
+  assert.doesNotMatch(P.directorPrompt({ sentences: [{ n: 1, t: 0, text: 'x' }], duration: 5, library: 'L' }), /PREVIOUS TAKES/, 'reuse mode: no takes section');
+});

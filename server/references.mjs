@@ -112,13 +112,13 @@ export async function gatherAssets({ scenes, jobDir, log = () => {}, deps = {} }
     if (s.kind === 'Repo') {
       try {
         const rk = keyOf('repo', ref, Math.floor(Date.now() / 36e5)); // reuse for the hour
-        assets.repos[ref] ??= (!deps.fetchFn && getJson('refs', rk)) || putJson('refs', rk, await fetchRepo(ref, deps));
+        assets.repos[ref] ??= (!deps.fetchFn && !deps.fresh && getJson('refs', rk)) || putJson('refs', rk, await fetchRepo(ref, deps));
         status[s.id] = { ok: true, kind: 'Repo', ref, detail: `${assets.repos[ref].stars}★` };
         log(`✅ ${ref} · ${assets.repos[ref].stars}★`);
       } catch (e) { status[s.id] = { ok: false, kind: 'Repo', ref, reason: e.message }; log(`⚠️ ${ref}: ${e.message}`); }
     } else {
       const sk = keyOf('site', ref, String(s.props?.name ?? ''), Math.floor(Date.now() / 864e5)); // a page screenshot is reused for the day
-      const hit = !deps.capture && getJson('refs', sk);
+      const hit = !deps.capture && !deps.fresh && getJson('refs', sk);
       if (hit) { assets.sites[ref] = hit; status[s.id] = { ok: true, kind: 'Site', ref, detail: `${hit.domain} (reused)` }; log(`♻️ ${hit.domain} screenshot reused`); continue; }
       status[s.id] = { ok: null, kind: 'Site', ref, cacheKey: sk }; sitesToShoot.push({ key: s.id, url: ref, name: s.props?.name });
     }

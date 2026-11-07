@@ -94,3 +94,18 @@ test('a translation that drops a sentence fails loudly and writes nothing', asyn
   assert.ok(!fs.existsSync(path.join(job.dir, 'sentences.json')));
   fs.writeFileSync(mode, 'ok');
 });
+
+test('"Start fresh" asks the model again even when an identical answer is cached (and stores the new one)', async () => {
+  process.env.INSTAEDITS_CACHE = 'on';
+  const { config: c } = await import('../server/config.mjs'); const saved = c.cacheDir; c.cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ie-cache-'));
+  try {
+    const s = pipe.STEPS_FOR_TEST();
+    await s.translate(mkJob('hi'), step(), () => {});
+    const n = calls().length;
+    const fresh = mkJob('hi'); fresh.state.mode = 'fresh';
+    const r = await s.translate(fresh, step(), () => {});
+    assert.equal(calls().length, n + 1, 'a new LLM call');
+    assert.ok(!r.cached);
+    assert.ok(calls().at(-1).argv.includes('medium'), 'fresh = more effort');
+  } finally { fs.rmSync(c.cacheDir, { recursive: true, force: true }); c.cacheDir = saved; process.env.INSTAEDITS_CACHE = 'off'; }
+});

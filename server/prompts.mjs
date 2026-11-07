@@ -18,7 +18,8 @@ RETENTION DOCTRINE (numbers are limits)
 - TRUST: never put a claim, name or number on a card that depends on a [?] spot, and never invent facts that are not in the speech.
 - Pick the right card: real product/screen → Screen or Site; open-source repo → Repo or Site (github URL = its real page screenshot); sequence/pipeline → Flow or Steps; one→many → Fanout; numbers → Stat or Chart; contrast → Compare; code → Code; takeaway → Hook or Bullets. Vary kinds (never 3 of one kind in a row). Card text ≤12 words, spoken vocabulary.
 - SHOW THE REAL THING: when the speaker talks about something listed under REAL SCREENSHOTS, use a Screen card with that shot — it is a real capture. When they name a tool/product/site or a GitHub repo (including "this repo"/"this tool" when CREATOR LINKS say which), use a Site card with its https URL — a real screenshot of the page; for a GitHub repo that is https://github.com/owner/name (the actual repo page). Only URLs you are CERTAIN of; each is verified and dropped if wrong. Up to 3 Repo/Site cards.
-- COLOUR: one hero accent on dark. 'hot' (≤2 words) / 'highlight' mark the single thing to look at.
+- MOTION, NOT TEXT: every card must SHOW something moving — a diagram, a real screen, a number filling a ring, a drawing icon. Prefer Flow/Fanout/Steps/Chart/Stat/Screen/Site/Code over Bullets; never two text-led cards (Hook/Bullets/Compare) in a row; give every Hook an 'icon' that fits its meaning.
+- COLOUR: one accent on warm paper (the design handles it). 'hot' (≤2 words) / 'highlight' mark the single thing to look at.
 - Payoff: last card = takeaway/result or the call to action, then ~1s of speaker.
 - Punch-ins on the full-frame speaker: 108-114%, 0.8-1.6s, only where no card is showing, ≤1 per 6s, on emphatic sentences.
 
@@ -81,7 +82,7 @@ export const languageName = (code) => LANG[code] ?? code;
  * indexed mode (non-English or no script): sentences are numbered, anchors are '#N' — language-independent;
  * `s.en` carries the English translation when the speech is not English.
  */
-export const directorPrompt = ({ sentences, duration, library, indexed = false, language = 'en', screens = {}, links = [], terms = [] }) => {
+export const directorPrompt = ({ sentences, duration, library, indexed = false, language = 'en', screens = {}, links = [], terms = [], previousTakes = [] }) => {
   const lines = sentences.map((s) => indexed
     ? `[#${s.n} @${s.t.toFixed(1)}s] ${s.text}${s.en ? `  ||  EN: ${s.en}` : ''}`
     : `[#${s.n} @${s.t.toFixed(1)}s] ${s.text}`).join('\n');
@@ -98,7 +99,10 @@ GLOSSARY (correct spellings of names this creator uses; speech recognition may h
 SPEECH, numbered (start time on the tight timeline):
 ${lines}
 
-ANCHORS: "#N" (sentence number) for every card, zoom and sfx anchor; add 'word' on cards to land on the exact spoken word. Plan as many cards as add new information (ids a1..), zooms, sfx, captions, music per your doctrine. Props must follow the kinds exactly.`;
+${previousTakes.length ? `PREVIOUS TAKES of this same video — the creator asked for a NEW take. Do NOT repeat them: choose a different angle/concept, a different opening hook (new words, new claim), and mostly different card kinds and visuals. Keep every fact true to the speech.
+${previousTakes.map((t, i) => `Take ${i + 1}: concept "${t.concept}" · hook "${t.hook}" · cards: ${t.cards.join(' | ')}`).join('\n')}
+
+` : ''}ANCHORS: "#N" (sentence number) for every card, zoom and sfx anchor; add 'word' on cards to land on the exact spoken word. Plan as many cards as add new information (ids a1..), zooms, sfx, captions, music per your doctrine. Props must follow the kinds exactly.`;
 };
 
 // ───────────────────────── 1b. TRANSLATE (Sonnet) — only for non-English speech ─────────────────────────

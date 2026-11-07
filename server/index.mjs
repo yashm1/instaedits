@@ -21,8 +21,8 @@ export const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${host}:${port}`);
   try {
     if (req.method === 'POST' && url.pathname === '/api/run') {
-      const { script, video, quality, dryRun, budgets, language, links, terms } = await readJson(req); // whitelist: never spread the body
-      const job = createJob({ script, video, quality, dryRun: !!dryRun, budgets, language, links, terms });
+      const { script, video, quality, dryRun, budgets, language, links, terms, mode } = await readJson(req); // whitelist: never spread the body
+      const job = createJob({ script, video, quality, dryRun: !!dryRun, budgets, language, links, terms, mode });
       startJob(job).catch(() => {});
       return json(res, 200, { id: job.id });
     }

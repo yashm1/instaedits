@@ -67,7 +67,7 @@ export const Reel: React.FC<ReelProps> = ({video, scenes, zooms, overlayOnly, ca
         </PanelContext.Provider>
       </div>
       {/* seam: one accent hairline with a soft glow */}
-      {split > 0.01 ? <div style={{position: 'absolute', left: 0, right: 0, top: seam - 2, height: 4, background: theme.accent, opacity: split, boxShadow: `0 0 24px ${theme.accent}`}} /> : null}
+      {split > 0.01 ? <div style={{position: 'absolute', left: 0, right: 0, top: seam - 2, height: 4, background: theme.text, opacity: split}} /> : null}
       <Captions lines={captions} t={f / fps} split={split} />
     </AbsoluteFill>
   );
@@ -80,8 +80,8 @@ const CardFade: React.FC<{children: React.ReactNode; dur: number; noFadeIn?: boo
   return <AbsoluteFill style={{opacity: o, transform: `translateY(${(1 - o) * 18}px)`}}>{children}</AbsoluteFill>;
 };
 
-// Captions: bold white words, the word being spoken sits on a pink box (the look of Edits' "Highlighter" style).
-const CAPTION_PINK = '#ff2d7a';
+// Captions: bold white words; the word being spoken sits on an accent box.
+const CAPTION_PINK = theme.accent; // the one accent, also behind the spoken word
 // Position follows the layout frame by frame: on the seam while a card shows, lower-middle on the full-frame speaker —
 // so a line that outlives its card never ends up over the face.
 const CAPTION_Y_FULL = 0.72;

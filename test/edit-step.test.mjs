@@ -118,3 +118,11 @@ test('a lagging playhead is retried before an SFX is given up', async () => {
   assert.equal(fake.calls.filter((c) => c.name === 'addSoundEffect').length, 2, 'both SFX placed');
   assert.ok(!report.some((r) => /sfx/.test(r)));
 });
+
+test('voice enhance survives one dropped connection (it is idempotent)', async () => {
+  const fake = fakeEdits({ failOnce: { selectById: 'fetch failed' } });
+  const { report } = await runEdit(opts(fake));
+  assert.equal(fake.calls.filter((c) => c.name === 'selectById').length, 2);
+  assert.ok(fake.calls.some((c) => c.name === 'setVoiceEnhance'));
+  assert.ok(!report.some((r) => /voice enhance/.test(r)));
+});

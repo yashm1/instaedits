@@ -49,16 +49,19 @@ function render(j){last=j;busy=j.status==='running'||j.status==='queued';documen
   if(!src)player=null;
   $('view').innerHTML=`
    <div class="title"><h1>${esc(base(j.video)||j.id)}</h1></div>
-   <div class="meta"><span><span class="mark ${label[0]}"></span> ${esc(label[1])}</span><span class="num" id="elapsed">${t0?dur(((busy?Date.now():t1)-t0)/1000):'–'}</span><span class="num">$${cost.toFixed(2)}</span>${reused?`<span>${reused} of ${ran} steps reused</span>`:''}${j.tight?`<span>${j.tight.saved}s of pauses cut</span>`:''}</div>
+   <div class="meta"><span><span class="mark ${label[0]}"></span> ${esc(label[1])}</span>${j.mode==='fresh'?'<span>Fresh take</span>':''}<span class="num" id="elapsed">${t0?dur(((busy?Date.now():t1)-t0)/1000):'–'}</span><span class="num">$${cost.toFixed(2)}</span>${reused?`<span>${reused} of ${ran} steps reused</span>`:''}${j.tight?`<span>${j.tight.saved}s of pauses cut</span>`:''}</div>
    ${j.direction?`<p class="concept">${esc(j.direction.concept)}</p>`:''}
    <div class="result"><div id="slot">${src?'':`<div class="placeholder">${busy?'The reel appears here when it is ready.':'No finished reel for this run.'}</div>`}</div><div>
       ${verdict}${checks.length?`<ul class="checks">${checks.map(c=>`<li class="${c[0]?'pass':'fail'}"><span>${c[0]?'✓':'✕'}</span><span>${esc(c[1])}</span><span class="v num">${esc(c[2])}</span></li>`).join('')}</ul>`:''}
       ${rv&&rv.issues&&rv.issues.length?`<p class="notes-h">Reviewer notes <span class="help" style="font-weight:400">(${rv.issues.length})</span></p><ul class="notes">${rv.issues.slice(0,3).map(n=>`<li>${esc(n)}</li>`).join('')}</ul>${rv.issues.length>3?`<details class="more"><summary>Show all ${rv.issues.length}</summary><ul class="notes">${rv.issues.slice(3).map(n=>`<li>${esc(n)}</li>`).join('')}</ul></details>`:''}`:''}
       ${j.output?`<img class="sheet" alt="One frame per card" src="/api/contact/${encodeURIComponent(j.id)}?v=${t1}" onerror="this.remove()">
-      <div class="actions"><button class="btn" id="reveal" type="button">Show in Finder</button><a class="btn" href="/api/video/${encodeURIComponent(j.id)}" download="${esc(base(j.video).replace(/\.[^.]+$/,''))}-edited.mp4">Download</a></div>`:''}
+      <div class="actions"><button class="btn" id="take" type="button" title="Same video and settings; new direction, everything regenerated">New take</button><button class="btn" id="reveal" type="button">Show in Finder</button><a class="btn" href="/api/video/${encodeURIComponent(j.id)}" download="${esc(base(j.video).replace(/\.[^.]+$/,''))}-edited.mp4">Download</a></div>`:''}
    </div></div>
    <div class="steps"><h2>Steps</h2>${steps}</div>`;
   if(player)$('slot').appendChild(player);
+  const take=$('take');if(take)take.onclick=async()=>{take.disabled=true;take.textContent='Starting…';
+    try{const {id:nid}=await post('/api/run',{video:j.video,script:j.script||'',language:j.languageDetected?'auto':(j.language||'auto'),links:(j.links||[]).join(','),terms:(j.terms||[]).join(','),quality:j.quality,mode:'fresh'});location.href='/job.html?id='+encodeURIComponent(nid)}
+    catch(e){toast(e.message);take.disabled=false;take.textContent='New take'}};
   const rev=$('reveal');if(rev)rev.onclick=()=>post('/api/reveal/'+encodeURIComponent(j.id)).catch(e=>toast(e.message));
   $('view').querySelectorAll('.step .head').forEach(h=>h.onclick=e=>{if(e.target.closest('.rerun'))return;const k=h.parentElement.dataset.k;openLogs.has(k)?openLogs.delete(k):openLogs.add(k);render(last)});
   $('view').querySelectorAll('.rerun').forEach(b=>b.onclick=async()=>{try{await post('/api/resume/'+encodeURIComponent(j.id),{from:b.dataset.from});connect();toast(`Re-running from “${b.dataset.from}”`)}catch(e){toast(e.message)}});

@@ -31,6 +31,11 @@
     <input class="text" id="terms" placeholder="Remotion, Claude Code" spellcheck="false">
     <div class="help">Used in the translation and captions. Empty uses the defaults.</div>
   </div>
+  <div class="field">
+    <label>Previous work</label>
+    <div class="segmented" id="mode"><button type="button" data-v="reuse" class="on">Reuse</button><button type="button" data-v="fresh">Start fresh</button></div>
+    <div class="help" id="modehelp">Unchanged steps from earlier runs are reused — fast and free.</div>
+  </div>
   <details><summary>More options</summary><div class="inner">
     <label for="script" style="font-size:12.5px;font-weight:600">Script (optional)</label>
     <textarea class="text" id="script" style="margin-top:8px" placeholder="Leave empty to work from the audio."></textarea>
@@ -50,7 +55,7 @@
 </section>
 </div>
 <script>
-const $=id=>document.getElementById(id);let lang='auto';
+const $=id=>document.getElementById(id);let lang='auto',mode=new URLSearchParams(location.search).get('mode')==='fresh'?'fresh':'reuse';
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const base=p=>String(p||'').split('/').pop();
 async function post(u,b){const r=await fetch(u,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b||{})});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||`${r.status} ${r.statusText}`);return d}
@@ -66,13 +71,16 @@ $('browse').onclick=async()=>{const b=$('browse');b.disabled=true;b.textContent=
   try{const r=await post('/api/pick');if(!r.cancelled)setVideo(r.path,[r.name,r.duration&&`${r.duration}s`,r.resolution].filter(Boolean).join(' · '))}
   catch(e){$('msg').textContent=/404/.test(e.message)?'This server is out of date — stop it and run npm start again.':e.message}
   finally{b.disabled=false;b.textContent='Browse…'}};
+const MODEHELP={reuse:'Unchanged steps from earlier runs are reused — fast and free.',fresh:'Everything is regenerated: a new creative direction (different hook and cards), new screenshots, captions, audio and a higher-quality render. Takes several minutes.'};
+function setMode(v){mode=v;[...$('mode').children].forEach(x=>x.classList.toggle('on',x.dataset.v===v));$('modehelp').textContent=MODEHELP[v]}
+$('mode').onclick=e=>{const b=e.target.closest('button');if(b)setMode(b.dataset.v)};setMode(mode);
 $('lang').onclick=e=>{const b=e.target.closest('button');if(!b)return;lang=b.dataset.v;[...$('lang').children].forEach(x=>x.classList.toggle('on',x===b))};
 fetch('/api/recent-videos').then(r=>r.ok?r.json():[]).then(vs=>{if(!vs.length)return;
   $('recent').innerHTML='<span>Recent:</span>'+vs.slice(0,4).map(v=>`<button type="button" title="${esc(v)}" data-v="${esc(v)}">${esc(base(v))}</button>`).join('');
   $('recent').onclick=e=>{const b=e.target.closest('button');if(b)setVideo(b.dataset.v,'Used before — unchanged steps are reused')}}).catch(()=>{});
 $('run').onclick=async()=>{$('msg').textContent='';const v=$('video').value.trim();if(!v){$('msg').textContent='Choose a video first.';return}
   const b=$('run');b.disabled=true;b.textContent='Starting…';
-  try{const {id}=await post('/api/run',{video:v,script:$('script').value,language:lang,links:$('links').value,terms:$('terms').value,quality:$('review').checked?'high':'fast',dryRun:$('dry').checked});location.href='/job.html?id='+encodeURIComponent(id)}
+  try{const {id}=await post('/api/run',{video:v,script:$('script').value,language:lang,links:$('links').value,terms:$('terms').value,quality:$('review').checked?'high':'fast',dryRun:$('dry').checked,mode});location.href='/job.html?id='+encodeURIComponent(id)}
   catch(e){$('msg').textContent=e.message;b.disabled=false;b.textContent='Create reel'}};
 
 async function loadReels(){try{const js=await (await fetch('/api/jobs')).json();

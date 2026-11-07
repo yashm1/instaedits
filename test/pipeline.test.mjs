@@ -285,3 +285,13 @@ test('audio (Edits) and graphics (Remotion) are one parallel group — and nothi
   assert.ok(keys.indexOf('captions') < keys.indexOf('graphics'), 'graphics need the caption lines');
   assert.ok(keys.indexOf('composite') > keys.indexOf('graphics') && keys.indexOf('composite') > keys.indexOf('audio'));
 });
+
+test('mode: "reuse" by default, "fresh" accepted, anything else refused', () => {
+  const { d, v } = tmpVideo();
+  const a = createJob({ script: 's', video: v, jobId: `tmo-a-${Date.now()}` });
+  const b = createJob({ script: 's', video: v, jobId: `tmo-b-${Date.now()}`, mode: 'fresh' });
+  try {
+    assert.equal(a.state.mode, 'reuse'); assert.equal(b.state.mode, 'fresh');
+    assert.throws(() => createJob({ script: 's', video: v, mode: 'yolo' }), /mode must be/);
+  } finally { for (const j of [a, b]) fs.rmSync(j.dir, { recursive: true, force: true }); fs.rmSync(d, { recursive: true, force: true }); }
+});

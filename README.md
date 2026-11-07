@@ -41,7 +41,7 @@ cp .env.example .env.local     # paste your Edits access token (Settings → Aut
 npm start                      # → http://127.0.0.1:4399
 ```
 
-Open the dashboard and press **Browse…** to pick your video in the native macOS file dialog (or click a recent one, or paste a path). Optionally add the links you talk about (e.g. your GitHub repo) and names to spell right, then press **Create reel**. Each reel gets its own page: the finished video plays right there, next to the quality checks, the reviewer's notes, a frame of every card, **Show in Finder** and **Download** — and the step timeline below (parallel steps side by side; reused steps marked). **More options → Dry run** plans and renders without opening Edits.
+Open the dashboard and press **Browse…** to pick your video in the native macOS file dialog (or click a recent one, or paste a path). Optionally add the links you talk about (e.g. your GitHub repo) and names to spell right, then choose **Reuse** (fast: unchanged steps from earlier runs are reused) or **Start fresh** (a completely new take), and press **Create reel**. Each reel gets its own page: the finished video plays right there, next to the quality checks, the reviewer's notes, a frame of every card, **Show in Finder** and **Download** — and the step timeline below (parallel steps side by side; reused steps marked). **More options → Dry run** plans and renders without opening Edits.
 
 **Prerequisites:** macOS · the **Edits** desktop app, open, with Automation enabled (the only supported editor; unofficial integration) · [Claude Code](https://claude.com/claude-code) CLI, logged in · `ffmpeg`/`ffprobe` on PATH · Node ≥ 22.18 · optional: **Screen Recording** permission for your terminal (for real screenshots of the Edits app).
 
@@ -75,7 +75,9 @@ GitHub repos are shown as the **actual repo page** (a fresh screenshot of `githu
 
 ## What you get
 
-Whenever a card shows, the frame **splits**: the card fills the top half, you stay visible in the bottom half (animated open/close, one accent seam). Between cards you're full-frame, with occasional punch-ins.
+Whenever a card shows, the frame **splits**: the card fills the top half, you stay visible in the bottom half (animated open/close, a thin ink seam). Between cards you're full-frame, with occasional punch-ins.
+
+**The look is editorial, not "AI":** warm paper, ink, and one burnt-orange accent — no gradient backgrounds, no glows, no neon (a test enforces it). And **nothing is text-only**: icons draw themselves on, a highlighter sweeps the key word, checklists tick, numbers fill a ring, data packets travel through diagrams, and on real screenshots a cursor glides to the thing being talked about and clicks.
 
 
 | Card | Use it for |
@@ -161,6 +163,8 @@ Edits adds captions, music and SFX with plain tool calls; Remotion renders the g
 ## Fast re-runs: nothing is computed twice
 
 Every step's output is stored in a **content-addressed cache** (`cache/`, gitignored), keyed by a hash of everything that shapes it: the video's bytes, the cuts, the exact prompt, the card props, the Remotion sources, the music/SFX list. Re-run the same video (a new job or "Re-run from here") and unchanged steps return instantly — no upload, no tokens, no render. Change one thing and only the steps downstream of it recompute. Big renders are pruned least-recently-used beyond `INSTAEDITS_CACHE_MAX_GB` (default 8); `INSTAEDITS_CACHE=off` forces a full recompute.
+
+**Want a different version instead?** Choose **Previous work → Start fresh** (or press **New take** on a finished reel). Nothing is reused: the video is re-transcribed, the screenshots and pages are re-captured, and the director — at higher effort — is shown this video's earlier takes and must pick a different angle, a new hook and different cards. Captions, the Edits audio mix, the graphics and a higher-quality final encode (CRF 12, `slow`) are all regenerated. The new results are cached too, so re-running *that* take is instant.
 
 ## Editing rules (enforced in code where possible)
 

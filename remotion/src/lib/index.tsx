@@ -9,6 +9,11 @@ const mono = loadMono('normal', {weights: ['500'], subsets: ['latin']}).fontFami
 
 export {theme, safe};
 
+// paper, not glow: a soft contact shadow and a barely-there grain (an SVG noise tile, inline)
+const SHADOW = '0 1px 0 #0000000a, 0 12px 28px -14px #3a2f1f55';
+const SHADOW_BIG = '0 2px 0 #0000000d, 0 26px 60px -24px #3a2f1f66';
+const GRAIN = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="180" height="180"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" stitchTiles="stitch"/><feColorMatrix values="0 0 0 0 0.35  0 0 0 0 0.3  0 0 0 0 0.22  0 0 0 0.09 0"/></filter><rect width="100%" height="100%" filter="url(#n)"/></svg>')}")`;
+
 // ───────── motion helpers ─────────
 const useSpring = (delay = 0, stiffness = 150, damping = 17) => {
   const f = useCurrentFrame();
@@ -48,11 +53,10 @@ const Stage: React.FC<{children: React.ReactNode; tag?: string; align?: 'center'
   const tagP = useSpring(0);
   return (
     <AbsoluteFill style={{background: theme.bg, fontFamily, color: theme.text, overflow: 'hidden'}}>
-      <AbsoluteFill style={{background: `radial-gradient(${panel ? 900 : 1100}px ${panel ? 700 : 1100}px at ${70 + Math.sin(t * 0.6) * 8}% ${18 + Math.cos(t * 0.5) * 4}%, ${theme.glow}88, transparent 62%), radial-gradient(900px 900px at ${15 + Math.cos(t * 0.5) * 6}% 92%, ${theme.accent}26, transparent 60%)`}} />
-      <AbsoluteFill style={{backgroundImage: `linear-gradient(${theme.line}33 1px, transparent 1px), linear-gradient(90deg, ${theme.line}33 1px, transparent 1px)`, backgroundSize: '90px 90px', opacity: 0.35, maskImage: 'radial-gradient(circle at 50% 45%, black 20%, transparent 75%)'}} />
+      <AbsoluteFill style={{backgroundImage: GRAIN, opacity: 0.5, mixBlendMode: 'multiply'}} />
       {tag ? (
         <div style={{position: 'absolute', top: z.tagTop, left: z.side, display: 'flex', alignItems: 'center', gap: 16, ...pop(tagP)}}>
-          <div style={{width: 14, height: 14, borderRadius: 7, background: theme.accent, boxShadow: `0 0 18px ${theme.accent}`}} />
+          <div style={{width: 14, height: 14, borderRadius: 7, background: theme.accent}} />
           <div style={{fontSize: 30, letterSpacing: 7, color: theme.accent, textTransform: 'uppercase', fontWeight: 800}}>{tag}</div>
         </div>
       ) : null}
@@ -84,6 +88,46 @@ const Icon: React.FC<{name?: IconName; size?: number; color?: string}> = ({name,
   ) : null;
 
 const usePanel = () => React.useContext(PanelContext) !== null;
+// ───────── motion toolkit: nothing on screen is static text ─────────
+/** A library icon that DRAWS ITSELF on (every stroke animates from 0 to full length), then settles. */
+const DrawIcon: React.FC<{name?: IconName; size?: number; color?: string; delay?: number; dur?: number}> = ({name, size = 120, color = theme.accent, delay = 0, dur = 18}) => {
+  const f = useCurrentFrame();
+  if (!name || !ICONS[name]) return null;
+  const p = interpolate(f - delay, [0, dur], [0, 1], {...clamp, easing: Easing.inOut(Easing.cubic)});
+  const kids = React.Children.toArray((ICONS[name] as React.ReactElement<{children?: React.ReactNode}>).props.children ?? ICONS[name]);
+  return (
+    <svg width={size} height={size} viewBox="0 0 48 48" fill="none" stroke={color} strokeWidth={2.6} strokeLinecap="round" strokeLinejoin="round" style={{transform: `scale(${0.92 + 0.08 * p})`}}>
+      {kids.map((el, i) => React.isValidElement(el) ? React.cloneElement(el as React.ReactElement<Record<string, unknown>>, {key: i, pathLength: 1, strokeDasharray: 1, strokeDashoffset: 1 - p}) : null)}
+    </svg>
+  );
+};
+/** A highlighter stroke that sweeps in behind a word (left → right). */
+const Marker: React.FC<{children: React.ReactNode; delay?: number; color?: string; ink?: string}> = ({children, delay = 0, color = theme.accent, ink = '#fff'}) => {
+  const f = useCurrentFrame();
+  const p = interpolate(f - delay, [0, 9], [0, 1], {...clamp, easing: Easing.out(Easing.cubic)});
+  return (
+    <span style={{position: 'relative', display: 'inline-block', padding: '0 14px', color: p > 0.5 ? ink : 'inherit'}}>
+      <span style={{position: 'absolute', left: 0, top: '8%', bottom: '4%', width: `${p * 100}%`, background: color, borderRadius: 10, transform: 'skewX(-6deg)', zIndex: 0}} />
+      <span style={{position: 'relative', zIndex: 1}}>{children}</span>
+    </span>
+  );
+};
+/** A pointer that glides in from below-right to (x, y) — fractions of its parent — then clicks (press + ripple). */
+const Cursor: React.FC<{x: number; y: number; delay?: number; travel?: number}> = ({x, y, delay = 8, travel = 22}) => {
+  const f = useCurrentFrame();
+  const p = interpolate(f - delay, [0, travel], [0, 1], {...clamp, easing: Easing.inOut(Easing.cubic)});
+  const click = f - delay - travel;
+  const press = click >= 0 && click < 6 ? 0.86 : 1;
+  const ring = interpolate(click, [0, 14], [0, 1], clamp);
+  const cx = interpolate(p, [0, 1], [x + 0.28, x]), cy = interpolate(p, [0, 1], [y + 0.32, y]);
+  return (
+    <div style={{position: 'absolute', left: `${cx * 100}%`, top: `${cy * 100}%`, pointerEvents: 'none', opacity: interpolate(f - delay, [0, 4], [0, 1], clamp)}}>
+      {click >= 0 ? <div style={{position: 'absolute', left: -28, top: -28, width: 56, height: 56, borderRadius: 28, border: `3px solid ${theme.accent}`, opacity: 1 - ring, transform: `scale(${0.4 + ring})`}} /> : null}
+      <svg width="46" height="46" viewBox="0 0 24 24" style={{transform: `scale(${press})`, transformOrigin: '2px 2px', filter: 'drop-shadow(0 3px 4px #0005)'}}><path d="M2 2l7.5 19 2.6-7.9L20 10.5z" fill="#111" stroke="#fff" strokeWidth="1.6" strokeLinejoin="round" /></svg>
+    </div>
+  );
+};
+
 const Heading: React.FC<{text?: string}> = ({text}) => {
   const panel = usePanel();
   const p = useSpring(0);
@@ -91,47 +135,51 @@ const Heading: React.FC<{text?: string}> = ({text}) => {
 };
 
 // ───────── scenes ─────────
-/** Hook / statement. `hot` words get the accent colour. `opening`: the FIRST FRAME of the reel — fully visible at frame 0,
- * hot words on a solid accent block, optional real screenshot (`shot`) as a darkened backdrop. */
-export const Hook: React.FC<{text: string; hot?: string[]; sub?: string; tag?: string; opening?: boolean; shot?: string}> = ({text, hot = [], sub, tag, opening, shot}) => {
+/** Hook / statement — kinetic words, the `hot` word gets a highlighter sweep, an icon draws itself on. `opening`: FRAME 0
+ * of the reel — fully legible on the first frame, then the marker sweeps and the icon draws; optional real `shot` behind. */
+export const Hook: React.FC<{text: string; hot?: string[]; sub?: string; tag?: string; opening?: boolean; shot?: string; icon?: IconName}> = ({text, hot = [], sub, tag, opening, shot, icon}) => {
   const f = useCurrentFrame();
   const panel = usePanel();
   const words = text.split(' ');
   const isHot = (w: string) => hot.some((h) => w.toLowerCase().replace(/[^a-z0-9]/g, '') === h.toLowerCase().replace(/[^a-z0-9]/g, ''));
-  const subP = useSpring(opening ? 0 : words.length * 4 + 4);
+  const subP = useSpring(opening ? 6 : words.length * 4 + 4);
+  const size = panel ? (text.length > 22 ? 112 : 136) : 124;
+  const line = (
+    <div style={{fontSize: opening ? size + 12 : size, fontWeight: 800, lineHeight: 1.04, letterSpacing: -3, display: 'flex', flexWrap: 'wrap', gap: '4px 24px'}}>
+      {words.map((w, i) => {
+        const p = opening ? 1 : spring({frame: f - i * 4, fps: 30, config: {damping: 14, stiffness: 190}});
+        return <span key={i} style={{display: 'inline-block', ...pop(p, 46)}}>{isHot(w) ? <Marker delay={opening ? 3 : i * 4 + 6}>{w}</Marker> : w}</span>;
+      })}
+    </div>
+  );
+  // a hand-drawn underline that draws in after the words (motion even when there is no icon)
+  const u = interpolate(f, [opening ? 8 : words.length * 4 + 6, (opening ? 8 : words.length * 4 + 6) + 14], [0, 1], {...clamp, easing: Easing.out(Easing.cubic)});
+  const underline = <svg width="420" height="26" viewBox="0 0 420 26" style={{marginTop: 18, display: 'block'}}><path d="M4 16 C 90 4, 180 24, 270 12 S 380 8, 416 14" fill="none" stroke={theme.accent} strokeWidth="7" strokeLinecap="round" pathLength={1} strokeDasharray={1} strokeDashoffset={1 - u} opacity={u > 0.01 ? 1 : 0} /></svg>;
+  const body = (
+    <div style={{display: 'flex', alignItems: 'center', gap: 34}}>
+      <div style={{flex: 1, minWidth: 0}}>
+        {line}{underline}
+        {sub ? <div style={{fontSize: panel ? 50 : 48, color: theme.dim, marginTop: 18, fontWeight: 600, ...pop(subP, 20)}}>{sub}</div> : null}
+      </div>
+      {icon ? <div style={{flex: 'none'}}><DrawIcon name={icon} size={panel ? 190 : 220} delay={opening ? 4 : 8} /></div> : null}
+    </div>
+  );
   if (opening) {
     const screens = (getInputProps() as {screens?: Record<string, {file: string}>}).screens ?? {};
     const bg = shot ? screens[shot] : undefined;
-    const settle = interpolate(f, [0, 24], [1.06, 1], {...clamp, easing: Easing.out(Easing.cubic)}); // visible at frame 0, then settles
-    const bar = interpolate(f, [4, 22], [0, 1], {...clamp, easing: Easing.out(Easing.cubic)});
+    const settle = interpolate(f, [0, 24], [1.04, 1], {...clamp, easing: Easing.out(Easing.cubic)});
     return (
       <AbsoluteFill style={{background: theme.bg, fontFamily, color: theme.text, overflow: 'hidden'}}>
-        {bg ? <Img src={staticFile(bg.file)} style={{position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', filter: 'blur(6px) brightness(0.35) saturate(1.1)', transform: `scale(${1.15 + (settle - 1)})`}} /> : null}
-        <AbsoluteFill style={{background: `radial-gradient(900px 700px at 25% 40%, ${theme.glow}cc, transparent 70%), linear-gradient(180deg, transparent 55%, ${theme.bg}ee)`}} />
+        {bg ? <><Img src={staticFile(bg.file)} style={{position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', transform: `scale(${1.12 + (settle - 1) * 2})`}} /><AbsoluteFill style={{background: theme.bg, opacity: 0.9}} /></> : null}
+        <AbsoluteFill style={{backgroundImage: GRAIN, opacity: 0.5, mixBlendMode: 'multiply'}} />
         <AbsoluteFill style={{padding: panel ? '150px 64px 70px' : '360px 76px 620px', justifyContent: 'center', transform: `scale(${settle})`, transformOrigin: '30% 50%'}}>
-          {tag ? <div style={{fontSize: 30, letterSpacing: 7, color: theme.accent, fontWeight: 800, textTransform: 'uppercase', marginBottom: 22}}>{tag}</div> : null}
-          <div style={{fontSize: text.length > 22 ? 128 : 156, fontWeight: 800, lineHeight: 1.0, letterSpacing: -4, display: 'flex', flexWrap: 'wrap', gap: '6px 28px'}}>
-            {words.map((w, i) => isHot(w)
-              ? <span key={i} style={{background: theme.accent, color: '#04201a', padding: '0 18px', borderRadius: 18, boxShadow: `0 0 60px ${theme.accent}66`}}>{w}</span>
-              : <span key={i}>{w}</span>)}
-          </div>
-          <div style={{height: 10, width: `${bar * 46}%`, background: theme.accent, borderRadius: 5, marginTop: 30}} />
-          {sub ? <div style={{fontSize: 52, color: theme.dim, marginTop: 26, fontWeight: 700}}>{sub}</div> : null}
+          {tag ? <div style={{fontSize: 28, letterSpacing: 6, color: theme.accent, fontWeight: 800, textTransform: 'uppercase', marginBottom: 20}}>{tag}</div> : null}
+          {body}
         </AbsoluteFill>
       </AbsoluteFill>
     );
   }
-  return (
-    <Stage tag={tag} align={panel ? 'center' : 'start'}>
-      <div style={{fontSize: panel ? (text.length > 22 ? 120 : 144) : 124, fontWeight: 800, lineHeight: 1.02, letterSpacing: -3}}>
-        {words.map((w, i) => {
-          const p = spring({frame: f - i * 4, fps: 30, config: {damping: 14, stiffness: 190}});
-          return <span key={i} style={{display: 'inline-block', marginRight: 26, color: isHot(w) ? theme.accent : theme.text, ...pop(p, 50)}}>{w}</span>;
-        })}
-      </div>
-      {sub ? <div style={{fontSize: panel ? 54 : 50, color: theme.dim, marginTop: panel ? 30 : 40, ...pop(subP)}}>{sub}</div> : null}
-    </Stage>
-  );
+  return <Stage tag={tag} align={panel ? 'center' : 'start'}>{body}</Stage>;
 };
 export const Title: React.FC<{text: string; sub?: string; tag?: string}> = ({text, sub, tag}) => <Hook text={text} sub={sub} tag={tag} />;
 
@@ -152,14 +200,14 @@ export const Flow: React.FC<{title?: string; nodes: {label: string; note?: strin
         const packet = ((f - 24 - i * 11) % 36) / 36;
         return (
           <React.Fragment key={i}>
-            <div style={{display: 'flex', alignItems: 'center', gap: 28, background: hot ? theme.cardHi : theme.card, border: `3px solid ${hot ? theme.accent : theme.line}`, borderRadius: 30, padding: '26px 34px', boxShadow: hot ? `0 0 60px ${theme.accent}33` : 'none', ...pop(p)}}>
+            <div style={{display: 'flex', alignItems: 'center', gap: 28, background: hot ? theme.cardHi : theme.card, border: `3px solid ${hot ? theme.accent : theme.line}`, borderRadius: 30, padding: '26px 34px', boxShadow: hot ? SHADOW : 'none', ...pop(p)}}>
               <Icon name={n.icon} size={78} color={hot ? theme.accent : theme.mute} />
               <div><div style={{fontSize: 54, fontWeight: 800}}>{n.label}</div>{n.note ? <div style={{fontSize: 34, color: theme.dim, marginTop: 4}}>{n.note}</div> : null}</div>
             </div>
             {i < nodes.length - 1 ? (
               <div style={{position: 'relative', height: 64, width: 6, margin: '0 auto'}}>
                 <div style={{position: 'absolute', inset: 0, background: theme.mute, transform: `scaleY(${grow})`, transformOrigin: 'top', borderRadius: 3}} />
-                {grow >= 1 && packet >= 0 ? <div style={{position: 'absolute', left: -7, top: packet * 56, width: 20, height: 20, borderRadius: 10, background: '#fff', boxShadow: `0 0 20px ${theme.accent}`}} /> : null}
+                {grow >= 1 && packet >= 0 ? <div style={{position: 'absolute', left: -7, top: packet * 56, width: 20, height: 20, borderRadius: 10, background: theme.accent}} /> : null}
               </div>
             ) : null}
           </React.Fragment>
@@ -198,7 +246,7 @@ const FlowRow: React.FC<{title?: string; nodes: {label: string; note?: string; i
 const FlowNode: React.FC<{nd: {label: string; note?: string; icon?: IconName}; hot: boolean; delay: number}> = ({nd, hot, delay}) => {
   const p = useSpring(delay);
   return (
-    <div style={{flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 18, textAlign: 'left', background: hot ? theme.cardHi : theme.card, border: `3px solid ${hot ? theme.accent : theme.line}`, borderRadius: 26, padding: '26px 20px', boxShadow: hot ? `0 0 60px ${theme.accent}40` : 'none', ...pop(p)}}>
+    <div style={{flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 18, textAlign: 'left', background: hot ? theme.cardHi : theme.card, border: `3px solid ${hot ? theme.accent : theme.line}`, borderRadius: 26, padding: '26px 20px', boxShadow: hot ? SHADOW : 'none', ...pop(p)}}>
       <Icon name={nd.icon} size={72} color={hot ? theme.accent : theme.mute} />
       <div style={{minWidth: 0}}>
         <div style={{fontSize: 44, fontWeight: 800, lineHeight: 1.06}}>{nd.label}</div>
@@ -217,7 +265,7 @@ const Link: React.FC<{delay: number; vertical?: boolean}> = ({delay, vertical}) 
   return (
     <div style={box}>
       <div style={{position: 'absolute', inset: 0, background: theme.mute, borderRadius: 3, transform: vertical ? `scaleY(${grow})` : `scaleX(${grow})`, transformOrigin: vertical ? 'top' : 'left'}} />
-      {grow >= 1 && packet >= 0 ? <div style={{position: 'absolute', width: 20, height: 20, borderRadius: 10, background: '#fff', boxShadow: `0 0 18px ${theme.accent}`, ...(vertical ? {left: -7, top: packet * (L - 20)} : {top: -7, left: packet * (L - 20)})}} /> : null}
+      {grow >= 1 && packet >= 0 ? <div style={{position: 'absolute', width: 20, height: 20, borderRadius: 10, background: theme.accent, ...(vertical ? {left: -7, top: packet * (L - 20)} : {top: -7, left: packet * (L - 20)})}} /> : null}
     </div>
   );
 };
@@ -233,7 +281,7 @@ export const Fanout: React.FC<{title?: string; from: {label: string; icon?: Icon
     <Stage tag={tag}>
       <Heading text={title} />
       <div style={{display: 'flex', justifyContent: 'center', ...pop(useSpring(0))}}>
-        <div style={{display: 'flex', alignItems: 'center', gap: 24, background: theme.cardHi, border: `3px solid ${theme.accent}`, borderRadius: 30, padding: '24px 40px', boxShadow: `0 0 60px ${theme.accent}33`}}>
+        <div style={{display: 'flex', alignItems: 'center', gap: 24, background: theme.cardHi, border: `3px solid ${theme.accent}`, borderRadius: 30, padding: '24px 40px', boxShadow: SHADOW}}>
           <Icon name={from.icon} size={panel ? 88 : 80} /><div style={{fontSize: panel ? 62 : 56, fontWeight: 800}}>{from.label}</div>
         </div>
       </div>
@@ -246,7 +294,7 @@ export const Fanout: React.FC<{title?: string; from: {label: string; icon?: Icon
           return (
             <g key={i}>
               <path d={path} stroke={theme.mute} strokeWidth={5} fill="none" strokeDasharray={400} strokeDashoffset={400 * (1 - d)} strokeLinecap="round" />
-              {d >= 1 && dot >= 0 ? <circle r={9} fill="#fff" style={{filter: `drop-shadow(0 0 8px ${theme.accent})`}} cx={(1 - dot) * (1 - dot) * (1 - dot) * (W / 2) + 3 * (1 - dot) * (1 - dot) * dot * (W / 2) + 3 * (1 - dot) * dot * dot * x2 + dot * dot * dot * x2} cy={3 * (1 - dot) * (1 - dot) * dot * LH * 0.53 + 3 * (1 - dot) * dot * dot * LH * 0.42 + dot * dot * dot * LH} /> : null}
+              {d >= 1 && dot >= 0 ? <circle r={9} fill={theme.accent} cx={(1 - dot) * (1 - dot) * (1 - dot) * (W / 2) + 3 * (1 - dot) * (1 - dot) * dot * (W / 2) + 3 * (1 - dot) * dot * dot * x2 + dot * dot * dot * x2} cy={3 * (1 - dot) * (1 - dot) * dot * LH * 0.53 + 3 * (1 - dot) * dot * dot * LH * 0.42 + dot * dot * dot * LH} /> : null}
             </g>
           );
         })}
@@ -277,7 +325,7 @@ export const Steps: React.FC<{title?: string; steps: {label: string; note?: stri
         <div style={{position: 'absolute', left: 39, top: 40, height: `calc((100% - 80px) * ${prog})`, width: 5, background: theme.accent, borderRadius: 3}} />
         {steps.map((s, i) => (
           <div key={i} style={{display: 'flex', gap: 34, alignItems: 'center', marginBottom: 40, ...pop(useSpring(8 + i * 12))}}>
-            <div style={{width: 84, height: 84, borderRadius: 42, background: theme.accent, color: '#04201a', fontSize: 46, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, boxShadow: `0 0 40px ${theme.accent}55`}}>{i + 1}</div>
+            <div style={{width: 84, height: 84, borderRadius: 42, background: theme.accent, color: '#fff', fontSize: 46, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, boxShadow: 'none'}}>{i + 1}</div>
             <div><div style={{fontSize: 52, fontWeight: 800, lineHeight: 1.1}}>{s.label}</div>{s.note ? <div style={{fontSize: 34, color: theme.dim, marginTop: 4}}>{s.note}</div> : null}</div>
           </div>
         ))}
@@ -312,7 +360,7 @@ export const Chart: React.FC<{title?: string; bars: {label: string; value: numbe
 };
 
 const TOKEN = /(\/\/.*|#.*|"[^"]*"|'[^']*'|\b\d+(?:\.\d+)?\b|\b(?:class|def|function|const|let|var|return|interface|public|private|protected|async|await|if|else|for|while|new|import|from|type|struct|enum|int|string|void|null|None|true|false|self|this|extends|implements)\b)/g;
-const colorOf = (t: string) => (/^(\/\/|#)/.test(t) ? '#6b7aa8' : /^["']/.test(t) ? '#ffcf70' : /^\d/.test(t) ? '#ff9e7a' : '#7c8cff');
+const colorOf = (t: string) => (/^(\/\/|#)/.test(t) ? '#8a8173' : /^["']/.test(t) ? '#e9b872' : /^\d/.test(t) ? '#f08a5d' : '#8fb3e8');
 /** Syntax-highlighted code that types in; `lines` (1-based) get an accent bar. */
 export const Code: React.FC<{code: string; title?: string; highlightLines?: number[]; tag?: string}> = ({code, title, highlightLines = [], tag}) => {
   const f = useCurrentFrame();
@@ -321,7 +369,7 @@ export const Code: React.FC<{code: string; title?: string; highlightLines?: numb
   return (
     <Stage tag={tag}>
       <Heading text={title} />
-      <div style={{background: '#070b18', border: `3px solid ${theme.line}`, borderRadius: 30, overflow: 'hidden', ...pop(useSpring(0))}}>
+      <div style={{background: '#1d1a16', border: `3px solid ${theme.line}`, borderRadius: 30, overflow: 'hidden', ...pop(useSpring(0))}}>
         <div style={{display: 'flex', gap: 12, padding: '20px 28px', background: theme.card}}>{['#ff5f57', '#febc2e', '#28c840'].map((c) => <div key={c} style={{width: 18, height: 18, borderRadius: 9, background: c}} />)}</div>
         <div style={{padding: '28px 0', fontFamily: mono, fontSize: 36, lineHeight: 1.5}}>
           {lines.map((ln, li) => {
@@ -330,7 +378,7 @@ export const Code: React.FC<{code: string; title?: string; highlightLines?: numb
             const hi = highlightLines.includes(li + 1) && budget > 0;
             return (
               <div key={li} style={{padding: '0 36px', background: hi ? `${theme.accent}18` : 'transparent', borderLeft: `6px solid ${hi ? theme.accent : 'transparent'}`, whiteSpace: 'pre', minHeight: 54}}>
-                {parts.map((p, pi) => <span key={pi} style={{color: TOKEN.test(p) || /^(\/\/|#|"|')/.test(p) ? colorOf(p) : '#d6e0ff'}}>{p}</span>)}
+                {parts.map((p, pi) => <span key={pi} style={{color: TOKEN.test(p) || /^(\/\/|#|"|')/.test(p) ? colorOf(p) : '#efe9dd'}}>{p}</span>)}
               </div>
             );
           })}
@@ -340,55 +388,90 @@ export const Code: React.FC<{code: string; title?: string; highlightLines?: numb
   );
 };
 
-/** One huge number; count-up when `value` is numeric (prefix/suffix kept). */
+/** One huge number counting up inside a ring that fills with it (a percentage fills to its value, anything else to full). */
 export const Stat: React.FC<{value: string; label: string; sub?: string; tag?: string}> = ({value, label, sub, tag}) => {
   const f = useCurrentFrame();
+  const panel = usePanel();
   const m = value.match(/^([^\d-]*)(-?[\d,.]+)(.*)$/);
+  const k = interpolate(f, [4, 34], [0, 1], {...clamp, easing: Easing.out(Easing.cubic)});
   let shown = value;
   if (m) {
-    const target = parseFloat(m[2].replace(/,/g, ''));
-    const dec = (m[2].split('.')[1] || '').length;
-    const k = interpolate(f, [4, 34], [0, 1], {...clamp, easing: Easing.out(Easing.cubic)});
-    const v = target * k;
+    const target = parseFloat(m[2].replace(/,/g, '')), dec = (m[2].split('.')[1] || '').length, v = target * k;
     shown = m[1] + (m[2].includes(',') ? Math.round(v).toLocaleString('en-US') : v.toFixed(dec)) + m[3];
   }
+  const pct = m && /%/.test(m[3]) ? Math.min(1, parseFloat(m[2]) / 100) : 1;
+  const R = 118, C = 2 * Math.PI * R, S = panel ? 300 : 340;
   return (
     <Stage tag={tag}>
-      <div style={{fontSize: shown.length > 7 ? 150 : 210, fontWeight: 800, lineHeight: 1, letterSpacing: -4, color: theme.accent, ...pop(useSpring(0))}}>{shown}</div>
-      <div style={{fontSize: 70, fontWeight: 800, marginTop: 28, lineHeight: 1.1, ...pop(useSpring(10))}}>{label}</div>
-      {sub ? <div style={{fontSize: 44, color: theme.dim, marginTop: 22, ...pop(useSpring(18))}}>{sub}</div> : null}
+      <div style={{display: 'flex', alignItems: 'center', gap: 40}}>
+        <div style={{position: 'relative', width: S, height: S, flex: 'none', ...pop(useSpring(0))}}>
+          <svg width={S} height={S} viewBox="0 0 280 280" style={{position: 'absolute', inset: 0, transform: 'rotate(-90deg)'}}>
+            <circle cx="140" cy="140" r={R} fill="none" stroke={theme.line} strokeWidth="18" />
+            <circle cx="140" cy="140" r={R} fill="none" stroke={theme.accent} strokeWidth="18" strokeLinecap="round" strokeDasharray={C} strokeDashoffset={C * (1 - pct * k)} />
+          </svg>
+          <div style={{position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', fontSize: shown.length > 6 ? 70 : 92, fontWeight: 900, letterSpacing: -3, color: theme.text}}>{shown}</div>
+        </div>
+        <div style={{minWidth: 0}}>
+          <div style={{fontSize: 64, fontWeight: 800, lineHeight: 1.06, ...pop(useSpring(10))}}>{label}</div>
+          {sub ? <div style={{fontSize: 42, color: theme.dim, marginTop: 16, ...pop(useSpring(18))}}>{sub}</div> : null}
+        </div>
+      </div>
     </Stage>
   );
 };
 
+/** Checklist: each item slides in and its check DRAWS itself; the line under the items grows as they land. */
 export const Bullets: React.FC<{title?: string; items: string[]; tag?: string}> = ({title, items, tag}) => {
+  const f = useCurrentFrame();
   const panel = usePanel();
   return (
-  <Stage tag={tag}>
-    <Heading text={title} />
-    {items.map((it, i) => (
-      <div key={i} style={{display: 'flex', gap: 28, alignItems: 'flex-start', fontSize: panel ? 66 : 54, fontWeight: 800, lineHeight: 1.12, marginBottom: panel ? 30 : 38, ...pop(useSpring(8 + i * 12))}}>
-        <div style={{width: 22, height: 22, borderRadius: 7, background: theme.accent, marginTop: 20, flexShrink: 0, transform: 'rotate(45deg)'}} />
-        <div>{it}</div>
-      </div>
-    ))}
-  </Stage>
+    <Stage tag={tag}>
+      <Heading text={title} />
+      {items.map((it, i) => {
+        const d = 8 + i * 12;
+        const p = useSpring(d);
+        const c = interpolate(f - d - 4, [0, 10], [0, 1], {...clamp, easing: Easing.out(Easing.cubic)});
+        return (
+          <div key={i} style={{display: 'flex', gap: 26, alignItems: 'center', fontSize: panel ? 62 : 54, fontWeight: 800, lineHeight: 1.1, padding: '18px 0', borderBottom: `3px solid ${theme.line}`, ...pop(p, 30)}}>
+            <svg width="66" height="66" viewBox="0 0 48 48" style={{flex: 'none'}}>
+              <circle cx="24" cy="24" r="21" fill={c > 0.98 ? theme.accent : 'none'} stroke={theme.accent} strokeWidth="3.5" pathLength={1} strokeDasharray={1} strokeDashoffset={1 - c} />
+              <path d="M14 25l7 7 13-15" fill="none" stroke={c > 0.98 ? '#fff' : theme.accent} strokeWidth="4.5" strokeLinecap="round" strokeLinejoin="round" pathLength={1} strokeDasharray={1} strokeDashoffset={1 - interpolate(c, [0.4, 1], [0, 1], clamp)} />
+            </svg>
+            <div>{it}</div>
+          </div>
+        );
+      })}
+    </Stage>
   );
 };
 
-export const Compare: React.FC<{left: {title: string; points: string[]}; right: {title: string; points: string[]}; tag?: string}> = ({left, right, tag}) => (
-  <Stage tag={tag}>
-    {[left, right].map((side, si) => {
-      const c = si ? theme.warm : theme.accent;
-      return (
-        <div key={si} style={{background: theme.card, border: `3px solid ${c}`, borderRadius: 30, padding: '30px 36px', marginBottom: 34, boxShadow: `0 0 50px ${c}22`, ...pop(useSpring(si * 14))}}>
-          <div style={{fontSize: 62, fontWeight: 800, color: c, marginBottom: 14}}>{side.title}</div>
-          {side.points.map((p, i) => <div key={i} style={{fontSize: 42, fontWeight: 500, marginTop: 10, ...pop(useSpring(10 + si * 14 + i * 8), 20)}}>→ {p}</div>)}
-        </div>
-      );
-    })}
-  </Stage>
-);
+/** Two sides slide in from opposite edges, a VS badge pops between them, points tick in one by one. */
+export const Compare: React.FC<{left: {title: string; points: string[]}; right: {title: string; points: string[]}; tag?: string}> = ({left, right, tag}) => {
+  const f = useCurrentFrame();
+  const vs = useSpring(12, 220, 12);
+  const side = (s: {title: string; points: string[]}, si: number) => {
+    const c = si ? theme.warm : theme.accent;
+    const x = interpolate(useSpring(si * 6, 120, 18), [0, 1], [si ? 140 : -140, 0]);
+    return (
+      <div key={si} style={{flex: 1, minWidth: 0, background: theme.card, border: `3px solid ${c}`, borderRadius: 26, padding: '28px 28px', boxShadow: SHADOW, transform: `translateX(${x}px)`, opacity: 1 - Math.min(1, Math.abs(x) / 140)}}>
+        <div style={{fontSize: 52, fontWeight: 800, color: c, marginBottom: 14, lineHeight: 1.05}}>{s.title}</div>
+        {s.points.map((pt, i) => {
+          const d = 16 + si * 6 + i * 8;
+          const t = interpolate(f - d, [0, 8], [0, 1], {...clamp, easing: Easing.out(Easing.cubic)});
+          return <div key={i} style={{display: 'flex', gap: 12, alignItems: 'baseline', fontSize: 38, fontWeight: 600, marginTop: 12, opacity: t, transform: `translateY(${(1 - t) * 14}px)`}}><span style={{color: c, fontWeight: 800}}>✓</span><span>{pt}</span></div>;
+        })}
+      </div>
+    );
+  };
+  return (
+    <Stage tag={tag}>
+      <div style={{display: 'flex', gap: 22, alignItems: 'stretch', position: 'relative'}}>
+        {side(left, 0)}{side(right, 1)}
+        <div style={{position: 'absolute', left: '50%', top: '50%', width: 92, height: 92, borderRadius: 46, background: theme.text, color: theme.bg, display: 'grid', placeItems: 'center', fontSize: 34, fontWeight: 900, transform: `translate(-50%, -50%) scale(${vs})`}}>VS</div>
+      </div>
+    </Stage>
+  );
+};
 
 // ───────── real tool / GitHub visuals (data fetched by the pipeline, passed in as inputProps.assets) ─────────
 type RepoAsset = {repo: string; owner: string; name: string; description: string; stars: number; forks: number; language: string; license: string; archived: boolean; avatar: string | null};
@@ -415,7 +498,7 @@ export const Repo: React.FC<{repo: string; tag?: string}> = ({repo, tag = 'GITHU
   const pulse = d ? 1 + 0.18 * Math.max(0, Math.sin(Math.min(1, Math.max(0, (f - 45) / 14)) * Math.PI)) : 1;
   return (
     <Stage tag={tag}>
-      <div style={{background: theme.card, border: `3px solid ${theme.accent}`, borderRadius: 34, padding: '44px 44px 40px', boxShadow: `0 0 70px ${theme.accent}22`, ...pop(useSpring(0))}}>
+      <div style={{background: theme.card, border: `3px solid ${theme.accent}`, borderRadius: 34, padding: '44px 44px 40px', boxShadow: SHADOW, ...pop(useSpring(0))}}>
         <div style={{display: 'flex', alignItems: 'center', gap: 30}}>
           {d?.avatar ? <Img src={d.avatar} style={{width: 124, height: 124, borderRadius: 62, border: `3px solid ${theme.line}`}} /> : <div style={{width: 124, height: 124, borderRadius: 62, background: theme.cardHi, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 60, fontWeight: 800, color: theme.accent}}>{owner[0]?.toUpperCase()}</div>}
           <div style={{minWidth: 0}}>
@@ -459,13 +542,14 @@ export const Site: React.FC<{url: string; name?: string; tag?: string}> = ({url,
   const label = name ?? d?.name ?? host;
   return (
     <Stage tag={tag}>
-      <div style={{border: `3px solid ${theme.line}`, borderRadius: 28, overflow: 'hidden', background: theme.card, boxShadow: `0 0 70px ${theme.glow}88`, ...pop(useSpring(0))}}>
+      <div style={{border: `3px solid ${theme.line}`, borderRadius: 28, overflow: 'hidden', background: theme.card, boxShadow: SHADOW_BIG, ...pop(useSpring(0))}}>
         <div style={{display: 'flex', alignItems: 'center', gap: 14, padding: '18px 24px', background: theme.cardHi}}>
           {['#ff5f57', '#febc2e', '#28c840'].map((c) => <div key={c} style={{width: 18, height: 18, borderRadius: 9, background: c}} />)}
           <div style={{flex: 1, marginLeft: 12, background: theme.bg, borderRadius: 20, padding: '8px 22px', fontSize: 30, color: theme.dim, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'}}>🔒 {host}</div>
         </div>
-        <div style={{width: '100%', aspectRatio: panel ? '2 / 1' : '1280 / 800', overflow: 'hidden', background: theme.bg}}>
+        <div style={{position: 'relative', width: '100%', aspectRatio: panel ? '2 / 1' : '1280 / 800', overflow: 'hidden', background: theme.bg}}>
           {d?.screenshot ? <Img src={d.screenshot} style={{width: '100%', display: 'block', transform: `scale(${zoom}) translateY(${panY}px)`, transformOrigin: panel ? '4% 16%' : '50% 0%'}} /> : <div style={{height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 64, fontWeight: 800, color: theme.dim}}>{host}</div>}
+          {d?.screenshot ? <Cursor x={0.2} y={0.42} delay={12} /> : null}
         </div>
       </div>
       <div style={{display: 'flex', alignItems: 'center', gap: 26, marginTop: 38, ...pop(useSpring(10), 20)}}>
@@ -491,10 +575,11 @@ export const Screen: React.FC<{shot: string; title?: string; caption?: string; t
   return (
     <Stage tag={tag}>
       {title ? <div style={{fontSize: 60, fontWeight: 800, lineHeight: 1.06, marginBottom: 24, ...pop(useSpring(0))}}>{title}</div> : null}
-      <div style={{borderRadius: 26, overflow: 'hidden', border: `3px solid ${theme.line}`, boxShadow: `0 30px 90px #000a, 0 0 80px ${theme.glow}aa`, ...pop(useSpring(4))}}>
+      <div style={{position: 'relative', borderRadius: 26, overflow: 'hidden', border: `3px solid ${theme.line}`, boxShadow: SHADOW_BIG, ...pop(useSpring(4))}}>
         <div style={{width: '100%', aspectRatio: `${ratio}`, overflow: 'hidden', background: '#1c1d20'}}>
           {s ? <Img src={staticFile(s.file)} style={{width: '100%', height: '100%', objectFit: 'cover', objectPosition: `${fx.x * 100}% ${fx.y * 100}%`, transform: `scale(${k})`, transformOrigin: `${fx.x * 100}% ${fx.y * 100}%`}} /> : null}
         </div>
+        {s ? <Cursor x={fx.x} y={fx.y} delay={10} /> : null}
       </div>
       {caption ? <div style={{fontSize: 44, color: theme.dim, marginTop: 24, lineHeight: 1.25, ...pop(useSpring(12), 18)}}>{caption}</div> : null}
     </Stage>

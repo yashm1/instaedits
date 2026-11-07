@@ -33,7 +33,8 @@ export async function runEdit({ video, edl, out, log = () => {}, tool = editsToo
 
   // 2. voice polish (loudness is already -14 LUFS from the render step)
   await soft('voice enhance', async () => {
-    await tool('selectById', { id, addToSelection: false });
+    // idempotent, so one retry on a dropped connection ("fetch failed") is safe
+    try { await tool('selectById', { id, addToSelection: false }); } catch (e) { if (!/fetch failed|ECONNRESET|socket/i.test(e.message)) throw e; await sleep(1500); await tool('selectById', { id, addToSelection: false }); }
     await tool('selectTool', { tool: 'volume' }); // Voice Enhance lives in the Volume panel, which must be presented first
     await tool('setVoiceEnhance', { reduceNoise: 0.35, enhanceVoice: 0.5 });
     await tool('dismissVolumePanel', {}).catch(() => {});

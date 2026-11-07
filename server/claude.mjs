@@ -44,10 +44,11 @@ export function writeSecretJson(obj) {
 /**
  * `cache: true` — for calls whose answer depends only on their inputs (no tools): an identical (model, system, prompt,
  * schema, effort) is answered from the shared cache with zero tokens. Re-running a video must not re-pay for the same answer.
+ * `cache: 'write'` — "start fresh": always ask the model, then store the new answer.
  */
 export async function runClaude({ prompt, cwd, onEvent, signal, mcpServers, cache = false, ...opts }) {
   const key = cache && !mcpServers && !opts.tools ? keyOf('claude', opts.model, opts.system ?? '', prompt, opts.schema ?? null, opts.effort ?? '') : null;
-  const hit = key ? getJson('llm', key) : null;
+  const hit = key && cache !== 'write' ? getJson('llm', key) : null;
   if (hit) { onEvent?.('♻️ same inputs as a previous run — answer reused (0 tokens)'); return { ...hit, cost: 0, tokens: { in: 0, out: 0 }, cached: true }; }
   const secret = mcpServers ? writeSecretJson({ mcpServers }) : null;
   try {

@@ -170,3 +170,20 @@ test('linesFromWords: lines break at punctuation and pauses, ≤3 words, balance
   assert.ok(pause.start === 3.5 && L[L.indexOf(pause) - 1].end <= 2.8, 'a long pause ends the previous line ≤0.6 s after its last word');
   for (const l of L) for (let j = 0; j + 1 < l.words.length; j++) assert.equal(l.words[j].end, l.words[j + 1].start, 'the highlight never blinks off mid-line');
 });
+
+test('compositeArgs hq (fresh take): CRF 12 + slow; default CRF 14 + medium', () => {
+  const v = (a, k) => a[a.indexOf(k) + 1];
+  const n = compositeArgs({ tight: 't', overlay: 'o', graphFile: 'g', out: 'x' }), h = compositeArgs({ tight: 't', overlay: 'o', graphFile: 'g', out: 'x', hq: true });
+  assert.deepEqual([v(n, '-crf'), v(n, '-preset')], ['14', 'medium']);
+  assert.deepEqual([v(h, '-crf'), v(h, '-preset')], ['12', 'slow']);
+  assert.equal(v(h, '-pix_fmt'), 'yuvj420p', 'colour description unchanged');
+});
+
+import { isEditorScreen } from '../server/screens.mjs';
+test('isEditorScreen: the Edits editor passes; the projects grid (a wall of thumbnails) never does', () => {
+  const o = (...t) => t.map((text) => ({ text }));
+  assert.equal(isEditorScreen(o('New project 13', 'Media', 'Audio', 'Captions', 'Export', 'Feedback')), true, 'the editor title bar shows the project name');
+  assert.equal(isEditorScreen(o('Media', 'Audio', 'Text', 'Captions', 'Export', '00:24.24')), true);
+  assert.equal(isEditorScreen(o('Projects', 'New project 12', 'Today · 57 MB · 00:24', 'New project')), false);
+  assert.equal(isEditorScreen(o('Settings', 'Automation')), false);
+});
