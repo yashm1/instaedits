@@ -31,7 +31,7 @@ test('doctrine text agrees with the enforced guardrail numbers', () => {
 });
 
 test('director prompt carries sentences with timestamps and the library', () => {
-  const p = P.directorPrompt({ script: 'x', sentences: [{ t: 1.234, text: 'Hello world.' }], duration: 20, library: '- `Hook`' });
+  const p = P.directorPrompt({ sentences: [{ n: 1, t: 1.234, text: 'Hello world.' }], duration: 20, library: '- `Hook`' });
   assert.match(p, /\[1\.2\] Hello world\./);
   assert.match(p, /20\.0s/);
   assert.match(p, /- `Hook`/);
@@ -71,4 +71,60 @@ test('edit prompt forbids cutting the pre-tightened clip and mutes card audio', 
 test('codegen prompt points at scenes.json for the right job and forbids restyling', () => {
   const t = P.codegenPrompt({ jobId: 'job-1' });
   assert.match(t, /jobs\/job-1\/scenes\.json/); assert.match(t, /do not restyle/);
+});
+
+test('verbatim mode (English): plain sentences, word anchors', () => {
+  const p = P.directorPrompt({ sentences: [{ n: 1, t: 1, text: 'Hello.' }], duration: 5, library: 'L' });
+  assert.match(p, /\[1\.0\] Hello\./); assert.match(p, /verbatim from the script/); assert.doesNotMatch(p, /#1/);
+});
+
+test('indexed mode (non-English): numbered speech with EN lines, "#N" anchors, English cards, spoken-language keywords', () => {
+  const p = P.directorPrompt({ sentences: [{ n: 3, t: 7.25, text: 'यह तेज़ है', en: 'It is fast' }], duration: 20, library: 'L', indexed: true, language: 'hi' });
+  assert.match(p, /\[#3 @7\.3s\] यह तेज़ है {2}\|\| {2}EN: It is fast/);
+  assert.match(p, /use "#N"/); assert.match(p, /never words/);
+  assert.match(p, /ENGLISH/); assert.match(p, /Hindi/);
+  assert.match(p, /VERBATIM from the spoken text/);
+  assert.doesNotMatch(p, /verbatim from the script/);
+});
+
+test('doctrine: card text is English regardless of spoken language; schema allows #N anchors', () => {
+  assert.match(P.DIRECTOR_SYSTEM, /LANGUAGE: all on-screen card text and hook text is ENGLISH/);
+  assert.match(P.DIRECTOR_SCHEMA.properties.scenes.items.properties.anchor.description, /#N/);
+});
+
+test('translate prompt: numbered input, keeps terms, optional reference, schema demands n+en', () => {
+  const p = P.translatePrompt({ sentences: [{ n: 1, text: 'नमस्ते' }, { n: 2, text: 'Kafka तेज़ है' }], language: 'hi', reference: 'rough english draft' });
+  assert.match(p, /from Hindi to English/); assert.match(p, /#1: नमस्ते/); assert.match(p, /#2: Kafka तेज़ है/); assert.match(p, /rough english draft/);
+  assert.doesNotMatch(P.translatePrompt({ sentences: [{ n: 1, text: 'x' }], language: 'hi' }), /Reference/);
+  assert.deepEqual(P.TRANSLATE_SCHEMA.properties.sentences.items.required, ['n', 'en']);
+  assert.match(P.TRANSLATE_SYSTEM, /technical terms/); assert.match(P.TRANSLATE_SYSTEM, /Do not summarise/);
+  assert.equal(P.languageName('hi'), 'Hindi'); assert.equal(P.languageName('fr'), 'fr');
+});
+
+test('edit prompt: caption language follows the EDL; non-English adds the glyph check', () => {
+  assert.match(ep(), /language en;/); assert.doesNotMatch(ep(), /SPOKEN language/);
+  const hi = P.editPrompt({ tight: '/t.mp4', clipsDir: '/c', edl: { ...edl, language: 'hi' }, out: '/o.mp4', quality: 'high' });
+  assert.match(hi, /language hi;/); assert.match(hi, /SPOKEN language \(hi\)/); assert.match(hi, /glyphs/); assert.match(hi, /"Default"/);
+});
+
+test('translator must flag likely-dropped words with [?] and never guess names or numbers', () => {
+  assert.match(P.TRANSLATE_SYSTEM, /OFTEN DROPS English words/);
+  assert.match(P.TRANSLATE_SYSTEM, /NEVER guess a product name/);
+  assert.match(P.TRANSLATE_SYSTEM, /\[\?\]/);
+  assert.match(P.TRANSLATE_SYSTEM, /supports it unambiguously/);
+  assert.match(P.TRANSLATE_SYSTEM, /correct a number that looks truncated/);
+});
+
+test('director must not build claims on [?] spots', () => {
+  assert.match(P.DIRECTOR_SYSTEM, /TRUST/);
+  assert.match(P.DIRECTOR_SYSTEM, /\[\?\]/);
+  assert.match(P.DIRECTOR_SYSTEM, /Never invent facts/);
+});
+
+test('translate prompt shows ALT lines only where present; system explains how to use them', () => {
+  const p = P.translatePrompt({ sentences: [{ n: 1, text: 'फिर लाइक्स पहले में लिखे', alt: 'फिर लाइक्स पहले कैच में लिखे Kafka' }, { n: 2, text: 'नतीजा' }], language: 'hi' });
+  assert.match(p, /#1: फिर लाइक्स पहले में लिखे\n {4}ALT: फिर लाइक्स पहले कैच में लिखे Kafka/);
+  assert.doesNotMatch(p.split('#2:')[1], /ALT/);
+  assert.match(P.TRANSLATE_SYSTEM, /ALT line/); assert.match(P.TRANSLATE_SYSTEM, /main transcript decides the sentence/);
+  assert.match(P.TRANSLATE_SYSTEM, /If neither does, write \[\?\]/);
 });

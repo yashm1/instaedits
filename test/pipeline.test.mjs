@@ -8,7 +8,7 @@ import { MODELS } from '../server/claude.mjs';
 import { SCENE_KINDS } from '../server/catalog.mjs';
 
 test('step order is fixed and creative decisions precede execution', () => {
-  assert.deepEqual(STEP_DEFS('high').map((s) => s.key), ['probe', 'transcribe', 'tighten', 'direction', 'resolve', 'codegen', 'render', 'edit', 'verify']);
+  assert.deepEqual(STEP_DEFS('high').map((s) => s.key), ['probe', 'transcribe', 'tighten', 'translate', 'direction', 'resolve', 'codegen', 'render', 'edit', 'verify']);
 });
 
 test('models: Opus directs, Sonnet codes, Sonnet/Haiku edit by quality', () => {
@@ -19,13 +19,12 @@ test('models: Opus directs, Sonnet codes, Sonnet/Haiku edit by quality', () => {
   assert.equal(m('fast', 'edit'), MODELS.haiku);
 });
 
-test('only direction, codegen and edit use an LLM', () => {
+test('only translate, direction, codegen and edit use an LLM', () => {
   const llm = STEP_DEFS('high').filter((s) => /claude/.test(s.model)).map((s) => s.key);
-  assert.deepEqual(llm, ['direction', 'codegen', 'edit']);
+  assert.deepEqual(llm, ['translate', 'direction', 'codegen', 'edit']);
 });
 
 test('createJob validates input before touching disk', () => {
-  assert.throws(() => createJob({ script: '', video: '/x' }), /script is required/);
   assert.throws(() => createJob({ script: 'hi', video: '/definitely/not/here.mp4' }), /video not found/);
 });
 
@@ -36,7 +35,7 @@ test('createJob sets budgets by quality and creates the job dir', () => {
   try {
     assert.equal(j.state.budgets.edit, 1.5);
     assert.ok(fs.existsSync(path.join(j.dir, 'state.json')));
-    assert.equal(j.state.steps.length, 9);
+    assert.equal(j.state.steps.length, 10);
   } finally { fs.rmSync(j.dir, { recursive: true, force: true }); fs.rmSync(tmp, { recursive: true, force: true }); }
 });
 
@@ -68,7 +67,10 @@ test('createJob rejects traversal ids, bad quality, unknown or oversized budgets
     assert.throws(() => createJob({ script: 's', video: v, budgets: { edit: 999 } }), /between 0 and/);
     assert.throws(() => createJob({ script: 's', video: v, budgets: { edit: -1 } }), /between 0 and/);
     assert.throws(() => createJob({ script: 's', video: v, budgets: { evil: 1 } }), /unknown budget/);
-    assert.throws(() => createJob({ script: 5, video: v }), /script is required/);
+    assert.throws(() => createJob({ script: 5, video: v }), /script must be text/);
+    assert.throws(() => createJob({ script: 's', video: v, language: 'Hindi' }), /language must be/);
+    assert.throws(() => createJob({ script: 's', video: v, language: 'e' }), /language must be/);
+    assert.throws(() => createJob({ script: 's', video: v, budgets: { translate: 50 } }), /between 0 and/);
     assert.throws(() => createJob({ script: 's', video: '/etc/hosts' }), /must be one of/);
   } finally { fs.rmSync(d, { recursive: true, force: true }); }
 });
@@ -132,4 +134,30 @@ test('recoverStaleJobs marks interrupted jobs as resumable errors, leaves finish
     // now it can be resumed (it would have been stuck "running" forever before)
     assert.doesNotThrow(() => { const j = resumeJob(a.id, 'probe'); j.abort.abort(); });
   } finally { for (const j of [a, b]) fs.rmSync(j.dir, { recursive: true, force: true }); fs.rmSync(d, { recursive: true, force: true }); }
+});
+
+test('the script is OPTIONAL: no script is fine, language defaults to en, provided flag is recorded', () => {
+  const { d, v } = tmpVideo();
+  const a = createJob({ video: v, jobId: `tn-a-${Date.now()}` });
+  const b = createJob({ script: '  ', video: v, language: 'hi', jobId: `tn-b-${Date.now()}` });
+  const c = createJob({ script: 'hello', video: v, jobId: `tn-c-${Date.now()}` });
+  try {
+    assert.equal(a.state.language, 'en'); assert.equal(a.state.scriptProvided, false);
+    assert.equal(b.state.language, 'hi'); assert.equal(b.state.scriptProvided, false);
+    assert.equal(c.state.scriptProvided, true);
+    assert.ok(!fs.existsSync(path.join(a.dir, 'script.txt')), 'no empty script file');
+    assert.ok(fs.existsSync(path.join(c.dir, 'script.txt')));
+    assert.equal(a.state.budgets.translate, config.budgets.translate);
+    assert.equal(a.state.steps.find((s) => s.key === 'translate').model, config.models.translator);
+  } finally { for (const j of [a, b, c]) fs.rmSync(j.dir, { recursive: true, force: true }); fs.rmSync(d, { recursive: true, force: true }); }
+});
+
+test('re-running a step clears its previous error (no stale error on a successful run)', async () => {
+  const { d, v } = tmpVideo();
+  const j = createJob({ script: 's', video: v, jobId: `te-${Date.now()}` });
+  try {
+    j.state.steps[0].error = 'old failure'; j.state.steps[0].status = 'error';
+    await runJob(j, { from: 'probe' }).catch(() => {}); // probe fails on a fake file, which is fine: we only check the old error is gone
+    assert.notEqual(j.state.steps[0].error, 'old failure');
+  } finally { fs.rmSync(j.dir, { recursive: true, force: true }); fs.rmSync(d, { recursive: true, force: true }); }
 });

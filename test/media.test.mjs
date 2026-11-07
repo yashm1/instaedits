@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { planCuts, findAnchor, sentences, buildEdl } from '../server/media.mjs';
+import { planCuts, findAnchor, sentences, attachAlt, buildEdl } from '../server/media.mjs';
 
 const W = (s, a, b) => ({ w: s, start: a, end: b });
 const words = [
@@ -102,4 +102,127 @@ test('buildEdl: a card anchored on the final words has no room and is dropped (l
   const e = buildEdl(d, words, c, (m) => logs.push(m));
   assert.equal(e.scenes.length, 0);
   assert.ok(logs.some((l) => /no room/.test(l)));
+});
+
+// ───────── non-English / no-script: numbered sentences and "#N" anchors ─────────
+const HI = [
+  W('नमस्ते', 0.4, 0.8), W('दोस्तों।', 0.8, 1.3),
+  W('आज', 1.5, 1.7), W('हम', 1.7, 1.9), W('Kafka', 1.9, 2.3), W('समझेंगे', 2.3, 2.9),
+  // long pause → new sentence even without punctuation
+  W('यह', 4.2, 4.4), W('बहुत', 4.4, 4.7), W('तेज़', 4.7, 5.0), W('है', 5.0, 5.2),
+  W('क्या', 6.5, 6.8), W('आप', 6.8, 7.0), W('तैयार', 7.0, 7.4), W('हैं?', 7.4, 7.8),
+  W('चलिए', 9.5, 9.9), W('शुरू', 9.9, 10.3), W('करते', 10.3, 10.6), W('हैं।', 10.6, 11.0),
+];
+
+test('sentences are numbered from 1 and split on the Devanagari danda (।), ? and pauses', () => {
+  const c = planCuts(HI, 12);
+  const s = sentences(HI, c.toOut);
+  assert.deepEqual(s.map((x) => x.n), [1, 2, 3, 4, 5]);
+  assert.equal(s[0].text, 'नमस्ते दोस्तों।');
+  assert.match(s[1].text, /Kafka/);
+  assert.equal(s[2].text, 'यह बहुत तेज़ है'); // split by the pause, no punctuation
+  for (let i = 1; i < s.length; i++) assert.ok(s[i].t > s[i - 1].t, 'strictly increasing start times');
+});
+
+test('sentence numbering is deterministic (direction and resolve must agree)', () => {
+  const c = planCuts(HI, 12);
+  assert.deepEqual(sentences(HI, c.toOut), sentences(HI, c.toOut));
+});
+
+const dir2 = (scenes, extra = {}) => ({ scenes: scenes.map((s, i) => ({ id: `a${i + 1}`, dur: 2, kind: 'Stat', props: {}, transition_in: 'transition_blur', transition_out: 'transition_blur', ...s })), zooms: [], sfx: [], captions: { style: 'Short Pop', highlightColor: '#FFD84D', keywords: [] }, music: {}, grade: {}, ...extra });
+
+test('buildEdl resolves "#N" anchors to the start of that sentence — language-independent', () => {
+  const c = planCuts(HI, 12); const sents = sentences(HI, c.toOut);
+  const e = buildEdl(dir2([{ anchor: '#1', kind: 'Hook' }, { anchor: '#3' }, { anchor: '#5' }]), HI, c, () => {}, sents, 'hi');
+  assert.equal(e.language, 'hi');
+  assert.equal(e.scenes.length, 3);
+  assert.equal(e.scenes[0].start, 0.1, 'opening Hook still lands at 0.1s');
+  assert.ok(Math.abs(e.scenes[1].start - (sents[2].t - 0.08)) < 0.011);
+  assert.ok(Math.abs(e.scenes[2].start - (sents[4].t - 0.08)) < 0.011);
+});
+
+test('"#N" anchors work for zooms and sfx too; unknown sentence numbers are dropped and logged', () => {
+  const c = planCuts(HI, 12); const sents = sentences(HI, c.toOut); const logs = [];
+  const d = dir2([{ anchor: '#1', kind: 'Hook' }, { anchor: '#99' }], { zooms: [{ anchor: '#3', dur: 1, scale: 1.1 }, { anchor: '#77', dur: 1, scale: 1.1 }], sfx: [{ name: 'Whoosh (sharp)', volume: 0.3, anchor: '#5' }] });
+  const e = buildEdl(d, HI, c, (m) => logs.push(m), sents, 'hi');
+  assert.equal(e.scenes.length, 1);
+  assert.ok(logs.some((l) => /#99/.test(l)));
+  assert.equal(e.zooms.length, 1);
+  assert.equal(e.sfx.length, 1);
+  assert.ok(Math.abs(e.sfx[0].at - (sents[4].t - 0.05)) < 0.011);
+});
+
+test('without sentence info a "#N" anchor is dropped, never mistaken for words', () => {
+  const c = planCuts(words, 11); const logs = [];
+  const e = buildEdl(dir2([{ anchor: '#2' }]), words, c, (m) => logs.push(m));
+  assert.equal(e.scenes.length, 0);
+  assert.equal(e.language, 'en');
+});
+
+test('English default: EDL carries language "en" and word anchors still work alongside', () => {
+  const c = planCuts(words, 11);
+  const e = buildEdl(direction(), words, c, () => {});
+  assert.equal(e.language, 'en');
+});
+
+// ───────── long, unpunctuated speech must not collapse into one sentence ─────────
+const run = (n, gaps = []) => { // n evenly spaced words, 0.4s each, extra pause after word i given in gaps
+  let t = 0; return Array.from({ length: n }, (_, i) => { const w = W(`w${i}`, t, t + 0.4); t += 0.4 + 0.05 + (gaps.find(([k]) => k === i)?.[1] ?? 0); return w; });
+};
+test('a long run with no punctuation and no big pause is split into short sentences (≤14 words, ≤6 s)', () => {
+  const ws = run(60); const c = planCuts(ws, 40); const s = sentences(ws, c.toOut);
+  assert.ok(s.length >= 4, `got ${s.length}`);
+  s.forEach((x, i) => { assert.ok(x.text.split(' ').length <= 14, `#${x.n} too long`); assert.equal(x.n, i + 1); });
+  assert.equal(s.map((x) => x.text).join(' '), ws.map((w) => w.w).join(' '), 'no word lost or reordered');
+});
+
+test('splits at the LARGEST internal pause, keeping ≥3 words on each side', () => {
+  const ws = run(16, [[9, 0.55]]); // biggest pause after word 9 (below the 0.7 hard-split)
+  const s = sentences(ws, (t) => t);
+  assert.equal(s.length, 2);
+  assert.equal(s[0].text.split(' ').length, 10);
+  const tiny = sentences(run(15, [[0, 0.6]]), (t) => t); // pause after word 0 would leave 1 word — not allowed
+  tiny.forEach((x) => assert.ok(x.text.split(' ').length >= 3 || tiny.length === 1));
+});
+
+test('short sentences are left alone; punctuation and long pauses still split first', () => {
+  const ws = [W('a', 0, .3), W('b', .3, .6), W('c.', .6, .9), W('d', 1, 1.3), W('e', 1.3, 1.6), W('f', 3, 3.3)];
+  const s = sentences(ws, (t) => t);
+  assert.deepEqual(s.map((x) => x.text), ['a b c.', 'd e', 'f']);
+});
+
+test('real-world shape: the 59-word unpunctuated Hindi transcript yields many sentences, not one', () => {
+  const hi = 'नमस्ते दोस्तों क्या आपने सोचा है कि इंस्टाग्राम हर सेकंड लाखों लाइक कैसे संभालता है सबसे पहले क्लाइंट लोड बैलेंसर तक पहुँचता है फिर लाइक्स पहले में लिखे जाते हैं में नहीं ताकि ट्रैफिक बढ़ने पर भी सिस्टम ना रुके इसके बाद वर्कर्स उन्हें में बैच में लिखते हैं नतीजा निन्यानवे दशमलव नौ प्रतिशत यही है हाई लेवल डिजाइन'.split(' ');
+  let t = 0.4; const ws = hi.map((w) => { const x = W(w, t, t + 0.35); t += 0.35 + 0.1; return x; });
+  const s = sentences(ws, (x) => x);
+  assert.ok(s.length >= 5 && s.length <= 12, `got ${s.length}`);
+});
+
+test('attachAlt: alt-pass words are grouped under the sentence they were spoken in (by time)', () => {
+  const sents = [{ n: 1, t: 0, text: 'a' }, { n: 2, t: 5, text: 'b' }, { n: 3, t: 10, text: 'c' }];
+  const alt = [W('Kafka', 1, 1.4), W('is', 4.9, 5.2), W('fast', 6, 6.4), W('99.99%', 11, 11.5)];
+  const r = attachAlt(sents, alt, (t) => t);
+  assert.equal(r[0].alt, 'Kafka'); assert.equal(r[1].alt, 'is fast'); assert.equal(r[2].alt, '99.99%');
+  assert.deepEqual(r.map((x) => x.n), [1, 2, 3], 'numbering untouched');
+});
+
+test('attachAlt: sentences with no alt words stay untouched; empty alt list is a no-op', () => {
+  const sents = [{ n: 1, t: 0, text: 'a' }, { n: 2, t: 5, text: 'b' }];
+  assert.deepEqual(attachAlt(sents, [], (t) => t), sents);
+  const r = attachAlt(sents, [W('x', 6, 6.2)], (t) => t);
+  assert.ok(!('alt' in r[0])); assert.equal(r[1].alt, 'x');
+});
+
+test('attachAlt uses the tight-timeline mapping (cuts shift alt words like primary words)', () => {
+  const c = planCuts(words, 11); const sents = sentences(words, c.toOut);
+  const r = attachAlt(sents, [W('Kafka', 6.7, 7.1)], c.toOut); // spoken in "Likes go to Kafka first."
+  const hit = r.find((x) => x.alt);
+  assert.match(hit.text, /Kafka/);
+});
+
+test('attachAlt tolerates cross-pass timing jitter: a word starting 0.2s before its sentence still belongs to it', () => {
+  const sents = [{ n: 1, t: 0, text: 'a' }, { n: 2, t: 5, text: 'b' }];
+  const r = attachAlt(sents, [W('early', 4.8, 5.1), W('late', 4.6, 4.9)], (t) => t);
+  assert.equal(r[1].alt, 'early'); // 4.8 ≥ 5 − 0.3
+  assert.equal(r[0].alt, 'late');  // 4.6 < 4.7: still the previous sentence
 });
