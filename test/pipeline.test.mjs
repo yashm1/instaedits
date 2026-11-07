@@ -8,7 +8,7 @@ import { MODELS } from '../server/claude.mjs';
 import { SCENE_KINDS } from '../server/catalog.mjs';
 
 test('step order is fixed and creative decisions precede execution', () => {
-  assert.deepEqual(STEP_DEFS('high').map((s) => s.key), ['probe', 'transcribe', 'tighten', 'translate', 'direction', 'resolve', 'codegen', 'render', 'edit', 'verify']);
+  assert.deepEqual(STEP_DEFS('high').map((s) => s.key), ['probe', 'transcribe', 'tighten', 'translate', 'direction', 'assets', 'resolve', 'codegen', 'render', 'edit', 'verify']);
 });
 
 test('models: Opus directs, Sonnet codes, Sonnet/Haiku edit by quality', () => {
@@ -35,7 +35,7 @@ test('createJob sets budgets by quality and creates the job dir', () => {
   try {
     assert.equal(j.state.budgets.edit, 1.5);
     assert.ok(fs.existsSync(path.join(j.dir, 'state.json')));
-    assert.equal(j.state.steps.length, 10);
+    assert.equal(j.state.steps.length, 11);
   } finally { fs.rmSync(j.dir, { recursive: true, force: true }); fs.rmSync(tmp, { recursive: true, force: true }); }
 });
 
@@ -54,7 +54,7 @@ test('Remotion library typechecks (catches prop-type drift before a render does)
 });
 
 // ───────── validation, queueing and resume ─────────
-import { runJob, startJob, resumeJob, getJob } from '../server/pipeline.mjs';
+import { runJob, startJob, resumeJob, getJob, STEPS_FOR_TEST, migrateSteps } from '../server/pipeline.mjs';
 import { config } from '../server/config.mjs';
 
 const tmpVideo = () => { const d = fs.mkdtempSync('/tmp/ie-'); const v = path.join(d, 'v.mp4'); fs.writeFileSync(v, 'x'); return { d, v }; };
@@ -159,5 +159,101 @@ test('re-running a step clears its previous error (no stale error on a successfu
     j.state.steps[0].error = 'old failure'; j.state.steps[0].status = 'error';
     await runJob(j, { from: 'probe' }).catch(() => {}); // probe fails on a fake file, which is fine: we only check the old error is gone
     assert.notEqual(j.state.steps[0].error, 'old failure');
+  } finally { fs.rmSync(j.dir, { recursive: true, force: true }); fs.rmSync(d, { recursive: true, force: true }); }
+});
+
+// ───────── real tool / repo visuals: the assets step and the resolver ─────────
+const mkJobDir = (direction, extra = {}) => {
+  const dir = fs.mkdtempSync('/tmp/ie-a-');
+  fs.mkdirSync(path.join(dir, 'clips'));
+  fs.writeFileSync(path.join(dir, 'direction.json'), JSON.stringify(direction));
+  for (const [k, v] of Object.entries(extra)) fs.writeFileSync(path.join(dir, k), JSON.stringify(v));
+  return { id: 'ja', dir, abort: new AbortController(), state: { language: 'en', duration: 20 } };
+};
+const sc = (id, kind, props) => ({ id, anchor: 'x', dur: 2, kind, props, transition_in: 'transition_blur', transition_out: 'transition_blur' });
+
+test('assets step: skipped (and stale files removed) when nothing is referenced', async () => {
+  const job = mkJobDir({ scenes: [sc('a1', 'Hook', {})] }, { 'assets.json': { repos: {} }, 'references.json': {} });
+  try {
+    const r = await STEPS_FOR_TEST().assets(job, { log: [] }, () => {});
+    assert.match(r.skipped, /no tool or GitHub repo/);
+    assert.ok(!fs.existsSync(path.join(job.dir, 'assets.json')) && !fs.existsSync(path.join(job.dir, 'references.json')));
+    assert.deepEqual(job.state.references, []);
+  } finally { fs.rmSync(job.dir, { recursive: true, force: true }); }
+});
+
+test('assets step: invalid references are recorded as failed with a reason and never fetched', async () => {
+  const job = mkJobDir({ scenes: [sc('a1', 'Repo', { repo: '../../etc/passwd' }), sc('a2', 'Site', { url: 'https://127.0.0.1:19501/mcp' })] });
+  try {
+    await STEPS_FOR_TEST().assets(job, { log: [] }, () => {});
+    const st = JSON.parse(fs.readFileSync(path.join(job.dir, 'references.json'), 'utf8'));
+    assert.equal(st.a1.ok, false); assert.match(st.a1.reason, /valid owner\/name/);
+    assert.equal(st.a2.ok, false); assert.match(st.a2.reason, /private|ports/, 'the Edits MCP address must be refused');
+    assert.equal(job.state.references.filter((r) => r.ok).length, 0);
+  } finally { fs.rmSync(job.dir, { recursive: true, force: true }); }
+});
+
+const W2 = (w, start, end) => ({ w, start, end });
+// continuous speech (no pauses to cut): "Hello friends." … "Kafka is fast." … "Redis too." … "Done now."
+const talk = (() => {
+  let t = 0.3; const out = []; const say = (txt) => txt.split(' ').forEach((w) => { out.push(W2(w, t, t + 0.4)); t += 0.4; });
+  say('Hello friends.'); say('one two three four five six seven eight'); say('Kafka is fast.'); say('one two three four five six seven eight nine ten'); say('Redis too.'); say('one two three four five six'); say('Done now.');
+  return out;
+})();
+
+test('resolve: a reference card is kept only when its visuals were verified; others are dropped with a logged reason', async () => {
+  const dir = { scenes: [sc('a1', 'Hook', { text: 'Hi' }), sc('a2', 'Repo', { repo: 'apache/kafka' }), sc('a3', 'Site', { url: 'https://redis.io' })], zooms: [], sfx: [{ name: 'Whoosh (sharp)', volume: 0.3, on_scene: 'a3', edge: 'in' }], captions: { style: 'Short Pop', highlightColor: '#FFD84D', keywords: [] }, music: {}, grade: {}, remotion_brief: '' };
+  dir.scenes[0].anchor = 'Hello friends'; dir.scenes[1].anchor = 'Kafka is fast'; dir.scenes[2].anchor = 'Redis too';
+  const job = mkJobDir(dir, { 'transcript.json': { words: talk }, 'references.json': { a2: { ok: true, kind: 'Repo', ref: 'apache/kafka' }, a3: { ok: false, kind: 'Site', ref: 'https://redis.io', reason: 'navigation timed out' } } });
+  const logs = [];
+  try {
+    await STEPS_FOR_TEST().resolve(job, { log: [] }, (m) => logs.push(m));
+    const edl = JSON.parse(fs.readFileSync(path.join(job.dir, 'edl.json'), 'utf8'));
+    assert.deepEqual(edl.scenes.map((s) => s.kind), ['Hook', 'Repo']);
+    assert.ok(logs.some((l) => /dropped Site card a3: navigation timed out/.test(l)));
+    assert.equal(edl.sfx.length, 0, 'sfx attached to a dropped card disappears with it');
+    const sj = JSON.parse(fs.readFileSync(path.join(job.dir, 'scenes.json'), 'utf8'));
+    assert.deepEqual(sj.scenes.map((s) => s.kind), ['Hook', 'Repo']);
+    assert.ok(!JSON.stringify(sj).includes('stars'), 'fetched data never enters scenes.json (the file the code-gen LLM reads)');
+  } finally { fs.rmSync(job.dir, { recursive: true, force: true }); }
+});
+
+test('resolve: with no references.json every reference card is dropped (never rendered without real data)', async () => {
+  const dir = { scenes: [sc('a1', 'Repo', { repo: 'apache/kafka' })], zooms: [], sfx: [], captions: { style: 'Short Pop', highlightColor: '#FFD84D', keywords: [] }, music: {}, grade: {} };
+  dir.scenes[0].anchor = 'Kafka is fast';
+  const job = mkJobDir(dir, { 'transcript.json': { words: talk } }); const logs = [];
+  try {
+    await STEPS_FOR_TEST().resolve(job, { log: [] }, (m) => logs.push(m));
+    assert.equal(JSON.parse(fs.readFileSync(path.join(job.dir, 'edl.json'), 'utf8')).scenes.length, 0);
+    assert.ok(logs.some((l) => /visuals were not fetched/.test(l)));
+  } finally { fs.rmSync(job.dir, { recursive: true, force: true }); }
+});
+
+// ───────── resuming jobs that predate a step ─────────
+test('migrateSteps inserts steps added after the job was created, in canonical order, keeping existing results', () => {
+  const full = STEP_DEFS('high').map((d) => ({ ...d, status: 'done', log: ['x'], cost: 0.5, tokens: { in: 1, out: 2 } }));
+  const legacy = { quality: 'high', steps: full.filter((x) => x.key !== 'assets' && x.key !== 'translate') };
+  assert.equal(migrateSteps(legacy), true);
+  assert.deepEqual(legacy.steps.map((x) => x.key), STEP_DEFS('high').map((x) => x.key));
+  const added = legacy.steps.filter((x) => ['assets', 'translate'].includes(x.key));
+  assert.ok(added.every((x) => x.status === 'pending' && x.log.length === 0 && x.cost === 0));
+  assert.ok(legacy.steps.filter((x) => !['assets', 'translate'].includes(x.key)).every((x) => x.status === 'done' && x.cost === 0.5), 'existing results untouched');
+});
+
+test('migrateSteps is a no-op for an up-to-date job and keeps unknown legacy steps at the end', () => {
+  const state = { quality: 'fast', steps: STEP_DEFS('fast').map((d) => ({ ...d, status: 'done', log: [], cost: 0, tokens: { in: 0, out: 0 } })) };
+  assert.equal(migrateSteps(state), false);
+  state.steps.push({ key: 'old-step', title: 'gone', status: 'done', log: [], cost: 0, tokens: { in: 0, out: 0 } });
+  migrateSteps(state);
+  assert.equal(state.steps.at(-1).key, 'old-step');
+});
+
+test('resumeJob migrates a legacy job so the new step actually runs', () => {
+  const { d, v } = tmpVideo(); const j = createJob({ script: 's', video: v, jobId: `tm-${Date.now()}` });
+  try {
+    j.state.status = 'error'; j.state.steps = j.state.steps.filter((x) => x.key !== 'assets'); // what getJob returns for a legacy job
+    const resumed = resumeJob(j.id, 'probe'); resumed.abort.abort();
+    assert.ok(resumed.state.steps.some((x) => x.key === 'assets'));
+    assert.deepEqual(resumed.state.steps.map((x) => x.key), STEP_DEFS('high').map((x) => x.key));
   } finally { fs.rmSync(j.dir, { recursive: true, force: true }); fs.rmSync(d, { recursive: true, force: true }); }
 });

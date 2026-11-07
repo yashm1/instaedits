@@ -38,5 +38,10 @@ export const config = {
   jobsDir: env.INSTAEDITS_JOBS_DIR || path.join(ROOT, 'jobs'),
   remotionDir: path.join(ROOT, 'remotion'),
   canvas: { width: 1080, height: 1920, fps: 30 },
+  // Reference visuals (real tool/repo cards). GITHUB_TOKEN is optional: raises the API limit from 60 to 5000 requests/hour.
+  githubApi: env.INSTAEDITS_GITHUB_API || 'https://api.github.com',
+  githubToken: () => env.GITHUB_TOKEN,
+  maxReferenceCards: 3,
+  referenceTimeoutMs: 20000,
   videoExtensions: ['.mp4', '.mov', '.m4v', '.webm', '.mkv'],
 };

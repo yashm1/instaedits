@@ -56,6 +56,7 @@ function render(j){
   $('total').textContent=j.steps.some(s=>s.cost)?'$'+j.steps.reduce((a,s)=>a+s.cost,0).toFixed(3):'';
   $('dir').innerHTML=j.direction?`<div class="card" style="margin-bottom:12px"><b>🎬 Direction</b> <span class="m">${esc(j.direction.concept)}</span>
    <div class="m" style="margin-top:6px">Captions: ${esc(j.direction.captions)} · Music: ${esc(j.direction.music)} · ${j.direction.cards} cards · ${j.direction.zooms} punch-ins · ${j.direction.sfx} SFX${j.tight?` · dead air cut: ${j.tight.saved}s`:''}</div>
+   ${j.references&&j.references.length?`<div class="m" style="margin-top:6px">🔗 Real visuals: ${j.references.map(r=>r.ok?`✅ ${esc(r.ref)}${r.detail?' ('+esc(r.detail)+')':''}`:`❌ ${esc(r.ref||r.kind)} — ${esc(r.reason||'failed')}`).join(' · ')}</div>`:''}
    ${j.edl?`<div class="m" style="margin-top:6px">Timeline: ${j.edl.cards.map(esc).join(' · ')}</div>`:''}</div>`:'';
   $('script_en').innerHTML=j.scriptEn?`<details class="card" style="margin-bottom:12px"><summary><b>🌐 English script</b> <span class="m">from the audio (${esc(j.language)})</span></summary><div class="m" style="margin-top:8px;white-space:pre-wrap">${esc(j.scriptEn)}</div></details>`:'';
   $('steps').innerHTML=j.steps.map((s,i)=>`<div class="step ${s.status}"><div class="sh"><span class="dot"></span>

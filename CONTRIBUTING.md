@@ -17,5 +17,7 @@ npm start
 ## Adding a card type
 Add the component in `remotion/src/lib/index.tsx`, document it in `remotion/LIBRARY.md`, add its name to `SCENE_KINDS` in `server/catalog.mjs`. `test/pipeline.test.mjs` fails if any of the three drift.
 
+Cards that show **fetched** data (`Repo`, `Site`) read it from `getInputProps().assets` and are listed in `server/references.mjs` (`REF_KINDS`). Never route fetched text to an LLM, and always pass URLs through `assertPublicHttpUrl`.
+
 ## Commit/PR style
 Imperative subject, a short "why" in the body. PR description: what, why, tests, not verified.

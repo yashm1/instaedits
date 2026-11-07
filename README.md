@@ -27,7 +27,7 @@ Most "AI video editors" cut your footage and sprinkle effects. Instaedits works 
 1. **One strong model decides everything creative, once** — what to show on which sentence, where to zoom, how loud the music is, which captions to emphasise.
 2. **Everything after that is mechanical** — local code resolves the decisions into exact timestamps, Remotion renders the cards, a cheaper model just executes the list inside your editor.
 3. **Where a rule can be checked, it is enforced in code** — a bad generation can't ship a 12-word hook or music louder than your voice.
-4. **It's cheap on purpose**: only 3–4 of the 10 steps use an LLM (translation runs only for non-English speech), each with a hard dollar cap.
+4. **It's cheap on purpose**: only 3–4 of the 11 steps use an LLM (translation runs only for non-English speech), each with a hard dollar cap.
 
 Built for creators who explain technical topics — system design (HLD/LLD), AI, engineering — but nothing in it is specific to tech.
 
@@ -58,6 +58,12 @@ The script is **optional**. Leave it empty and Instaedits transcribes your audio
 
 Hinglish needs care: speech recognition often drops the English words inside Hindi speech (Kafka, `99.99%`). Instaedits runs a **second, English-model pass** over the same audio and gives the translator both versions; where a word is still missing it writes `[?]` and the director avoids building claims on it. If a term matters, put it in the optional script box as a hint.
 
+## Mention a tool or a GitHub repo? It shows the real thing
+
+When the speaker names an open-source project or a tool, the director can add a **Repo** card (live stars, forks, language, licence from GitHub) or a **Site** card (a real screenshot of the official site in a browser frame). The director only proposes `owner/name` or a URL; **the pipeline then goes and verifies it** — a repo that doesn't exist on GitHub, or a site that won't load, is silently dropped (and shown as ❌ in the dashboard) rather than putting a wrong claim on screen. At most 3 per video.
+
+Safety: fetched text and images go straight to Remotion — **never to an LLM** — so a web page can't inject instructions into the pipeline. Every URL passes an SSRF guard (https only, public hosts only, no ports, DNS results checked, redirects re-checked) so a model-suggested URL can't reach your local network or the Edits app. Set `GITHUB_TOKEN` (no scopes needed) to raise GitHub's limit from 60 to 5000 requests/hour.
+
 ## What you get
 
 | Card | Use it for |
@@ -70,6 +76,8 @@ Hinglish needs care: speech recognition often drops the English words inside Hin
 | **Code** | Syntax-highlighted code that types in (LLD) |
 | **Stat** | A big count-up number: `99.99%`, `1.2M` |
 | **Compare / Bullets** | Trade-offs and takeaways |
+| **Repo** | A *real* GitHub repo — avatar, description, ★ count-up, forks, language, licence — fetched live |
+| **Site** | A *real* screenshot of a tool's official site in a browser frame, with its icon and description |
 
 ![The card library: Flow, Code, Steps, Chart, Hook](docs/assets/cards.png)
 
@@ -96,11 +104,12 @@ flowchart LR
 | 3 | Cut dead air → `tight.mp4` | ffmpeg | — |
 | 4 | **Translate to English** (non-English speech only) | Claude Sonnet | ✅ |
 | 5 | **Creative direction** | Claude Opus | ✅ |
-| 6 | Guardrails, then anchors → exact timestamps (the EDL) | local | — |
-| 7 | Write the Remotion scenes | Claude Sonnet | ✅ |
-| 8 | Render the cards | Remotion | — |
-| 9 | **Execute the EDL** in the editor | Claude Sonnet (High) / Haiku (Fast) | ✅ |
-| 10 | Verify the export | ffprobe | — |
+| 6 | **Fetch real visuals** for named tools / repos (verified, see below) | GitHub API + headless Chrome | — |
+| 7 | Guardrails, then anchors → exact timestamps (the EDL) | local | — |
+| 8 | Write the Remotion scenes | Claude Sonnet | ✅ |
+| 9 | Render the cards | Remotion | — |
+| 10 | **Execute the EDL** in the editor | Claude Sonnet (High) / Haiku (Fast) | ✅ |
+| 11 | Verify the export | ffprobe | — |
 
 Because you speak the script verbatim, step 5 finds each card's anchor phrase in the real transcript — cards land on the right word, not on a guessed timestamp. Deep dive: [docs/architecture.md](docs/architecture.md).
 
@@ -166,6 +175,7 @@ Everything environment-specific is in [`server/config.mjs`](server/config.mjs) a
 | Jobs directory | `./jobs` | `INSTAEDITS_JOBS_DIR` |
 | Staging folder for the Edits app | `~/Movies/Instaedits` | `INSTAEDITS_STAGING_DIR` |
 | Translator model | `claude-sonnet-5-5` | `INSTAEDITS_MODEL_TRANSLATOR` |
+| GitHub API token (optional) | none (60 req/h) | `GITHUB_TOKEN` |
 
 ## Troubleshooting
 
@@ -179,6 +189,7 @@ Everything environment-specific is in [`server/config.mjs`](server/config.mjs) a
 | `importMedia … Sandbox bookmark unavailable` | The Edits app is sandboxed and can't read arbitrary folders. Instaedits stages everything it needs in `~/Movies/Instaedits/<job>/` (hard links, no extra disk). If your Movies folder is elsewhere, set `INSTAEDITS_STAGING_DIR`. |
 | Job shows `queued` | Jobs run one at a time (one editor, one Remotion workspace). Wait or cancel the running one. |
 | Job stuck `running` after a crash | Restart `npm start`: interrupted jobs are marked resumable; use **Re-run from here**. |
+| `rate limit reached — set GITHUB_TOKEN` | A Repo card couldn't be fetched. Add a scope-less `GITHUB_TOKEN` to `.env.local`. |
 | Port already in use | `PORT=4500 npm start` |
 
 ## Status & roadmap
@@ -196,6 +207,8 @@ Roadmap: end-to-end verification on more real videos · occurrence-aware anchors
 **What does the Edits app do with my audio?** Transcription and the music/SFX libraries come from the Edits app; whether any of it happens in its cloud is governed by *its* privacy policy. Check it if your footage is sensitive.
 
 **How much does a run cost?** Direction + code-gen is about $0.15 for a 25-second reel (measured). The editing step is capped at $1.50 (Fast) or $3 (High); steps are cached, so re-runs are cheaper.
+
+**Does it visit websites?** Only for Repo/Site cards: the GitHub API, and the official site of a tool the speaker names (opened in headless Chrome, public https hosts only). Nothing is sent from the page to an LLM.
 
 **Can I use CapCut / Premiere / DaVinci?** Not currently — the Edits app only.
 

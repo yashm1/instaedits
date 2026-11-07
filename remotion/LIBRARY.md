@@ -10,6 +10,8 @@ Icons (use in `icon`): client, server, db, queue, cache, lb, cloud, lock, ai, us
 - `Stat {value, label, sub?, tag?}` — count-up number, e.g. "99.99%", "1.2M"
 - `Bullets {title?, items:[...], tag?}` — max 3 short items
 - `Compare {left:{title,points[]}, right:{title,points[]}, tag?}` — max 3 points per side
+- `Repo {repo:"owner/name", tag?}` — the REAL GitHub repo as a card (avatar, description, ★ count-up, forks, language, licence), fetched live. Use ONLY when the speaker names a specific open-source project and you are certain of the exact `owner/name`; it is verified against GitHub and silently dropped if wrong
+- `Site {url:"https://…", name, tag?}` — a REAL screenshot of a tool's official site in a browser frame (icon, name, description). Official `https` URL only, only when certain; verified by opening it, dropped if it fails
 (`Title` is an alias of `Hook`.)
 
 # Output contract: src/Scenes.tsx must export

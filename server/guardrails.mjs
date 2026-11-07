@@ -1,5 +1,8 @@
 // Hard rules applied to the director's output. The prompt asks; this file enforces.
 // Every number here comes from rules several independent editing guides agree on (see docs/research.md).
+import { config } from './config.mjs';
+import { isRefKind, parseRepo } from './references.mjs';
+
 export const LIMITS = {
   musicMax: 0.16, duckRatio: 0.6,
   sfxMin: 0.15, sfxMax: 0.45, sfxPerSeconds: 6, sfxFloor: 2,
@@ -10,6 +13,7 @@ export const LIMITS = {
 };
 
 const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
+const isHttps = (u) => { try { return new URL(String(u)).protocol === 'https:'; } catch { return false; } };
 const words = (t) => String(t ?? '').trim().split(/\s+/).filter(Boolean);
 
 /** Returns { direction, notes } — a corrected deep copy plus a human-readable list of what was changed/flagged. */
@@ -23,6 +27,18 @@ export function applyGuardrails(input, { totalSeconds, scriptWordCount }) {
     if (dur !== s.dur) notes.push(`card ${s.id}: duration ${s.dur}s → ${dur}s`);
     return { ...s, dur };
   });
+  // real-world references: valid shape only, capped; anything dropped here also loses its attached sfx
+  const droppedIds = new Set(); let refs = 0;
+  d.scenes = d.scenes.filter((s) => {
+    if (!isRefKind(s.kind)) return true;
+    const valid = s.kind === 'Repo' ? !!parseRepo(s.props?.repo) : isHttps(s.props?.url);
+    const reason = !valid ? 'invalid reference' : refs >= config.maxReferenceCards ? `over the ${config.maxReferenceCards}-reference limit` : null;
+    if (reason) { notes.push(`${s.kind} card ${s.id} dropped: ${reason}`); droppedIds.add(s.id); return false; }
+    if (s.kind === 'Repo') s.props.repo = parseRepo(s.props.repo); // normalise (accepts a github.com URL)
+    else s.props.url = new URL(s.props.url).href; // canonical form = the key the fetched assets are stored under
+    refs++; return true;
+  });
+  d.sfx = (d.sfx ?? []).filter((x) => !droppedIds.has(x.on_scene));
   const first = d.scenes[0];
   if (first && first.kind !== 'Hook') notes.push(`warning: first card is ${first.kind}, not a Hook`);
   if (first?.kind === 'Hook' && words(first.props?.text).length > L.hookWordsMax) {
