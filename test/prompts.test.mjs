@@ -128,3 +128,12 @@ test('translate prompt shows ALT lines only where present; system explains how t
   assert.match(P.TRANSLATE_SYSTEM, /ALT line/); assert.match(P.TRANSLATE_SYSTEM, /main transcript decides the sentence/);
   assert.match(P.TRANSLATE_SYSTEM, /If neither does, write \[\?\]/);
 });
+
+test('doctrine tells the director to show real repos/sites only when certain, capped, never first', () => {
+  const t = P.DIRECTOR_SYSTEM;
+  assert.match(t, /REFERENCES/); assert.match(t, /Repo card/); assert.match(t, /Site card/);
+  assert.match(t, /CERTAIN/); assert.match(t, /dropped if wrong/); assert.match(t, /Up to 3 per video/); assert.match(t, /never as the opening card/);
+  assert.match(t, /where it is first named/); assert.match(t, /proper name/); assert.doesNotMatch(t, /never for a passing mention/, 'too timid: central tools (Kafka) were being skipped');
+  assert.ok(P.DIRECTOR_SCHEMA.properties.scenes.items.properties.kind.enum.includes('Repo'));
+  assert.ok(P.DIRECTOR_SCHEMA.properties.scenes.items.properties.kind.enum.includes('Site'));
+});

@@ -80,3 +80,37 @@ test('a well-behaved direction passes through without notes', () => {
   };
   assert.deepEqual(run(d).notes, []);
 });
+
+// ───────── references (Repo / Site) ─────────
+import { config } from '../server/config.mjs';
+const refScene = (id, kind, props) => ({ id, anchor: 'x', dur: 3, kind, props });
+const withRefs = (...scenes) => { const d = base(); d.scenes = [d.scenes[0], ...scenes]; d.sfx = []; return d; };
+
+test('references: valid Repo/Site cards pass; a github.com URL is normalised to owner/name', () => {
+  const { direction, notes } = run(withRefs(refScene('r1', 'Repo', { repo: 'https://github.com/apache/kafka' }), refScene('r2', 'Site', { url: 'https://kafka.apache.org' })));
+  assert.equal(direction.scenes.find((s) => s.id === 'r1').props.repo, 'apache/kafka');
+  assert.ok(direction.scenes.some((s) => s.id === 'r2'));
+  assert.ok(!notes.some((n) => /dropped/.test(n)));
+});
+
+test('references: malformed repos and non-https URLs are dropped with a note, and their sfx go with them', () => {
+  const d = withRefs(refScene('r1', 'Repo', { repo: 'not a repo' }), refScene('r2', 'Repo', { repo: '../../x' }), refScene('r3', 'Site', { url: 'http://insecure.example' }), refScene('r4', 'Site', { url: 'javascript:alert(1)' }), refScene('r5', 'Site', {}));
+  d.sfx = [{ name: 'Whoosh (sharp)', volume: 0.3, on_scene: 'r1', edge: 'in' }, { name: 'Whoosh (sharp)', volume: 0.3, on_scene: 'a1', edge: 'in' }];
+  const { direction, notes } = run(d);
+  assert.deepEqual(direction.scenes.filter((s) => ['Repo', 'Site'].includes(s.kind)), []);
+  assert.equal(notes.filter((n) => /dropped: invalid reference/.test(n)).length, 5);
+  assert.deepEqual(direction.sfx.map((x) => x.on_scene), ['a1']);
+});
+
+test('references are capped at config.maxReferenceCards', () => {
+  const many = Array.from({ length: config.maxReferenceCards + 2 }, (_, i) => refScene(`r${i}`, 'Repo', { repo: `o/r${i}` }));
+  const { direction, notes } = run(withRefs(...many));
+  assert.equal(direction.scenes.filter((s) => s.kind === 'Repo').length, config.maxReferenceCards);
+  assert.equal(notes.filter((n) => /reference limit/.test(n)).length, 2);
+});
+
+test('references: a Site url is normalised to its canonical href (the key its fetched assets are stored under)', () => {
+  const { direction } = run(withRefs(refScene('r1', 'Site', { url: 'https://kafka.apache.org' }), refScene('r2', 'Site', { url: 'https://Redis.IO/docs/../' })));
+  assert.equal(direction.scenes.find((s) => s.id === 'r1').props.url, 'https://kafka.apache.org/');
+  assert.equal(direction.scenes.find((s) => s.id === 'r2').props.url, 'https://redis.io/');
+});

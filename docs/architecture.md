@@ -21,6 +21,7 @@ flowchart LR
 | `transcript.json` | Edits `transcribeClip` | cuts, direction, resolver |
 | `transcript.alt.json` | Edits `transcribeClip` (English pass, non-English speech only) | translator |
 | `sentences.json` | translator (numbered sentences + English) | director, resolver (`#N` anchors) |
+| `assets.json` + `references.json` | `references.mjs` (GitHub API + headless Chrome) | Remotion `inputProps`; the resolver (drops unverified cards) |
 | `tight.mp4` + `cuts.json` | ffmpeg | the editor (never re-cut) |
 | `direction.json` | Opus, then guardrails | resolver |
 | `edl.json` | resolver (anchors → exact seconds) | edit prompt |
@@ -32,6 +33,7 @@ flowchart LR
 - `claude.mjs` — minimal `claude -p` runner (no skills/settings, scoped tools, USD cap, secrets via temp file).
 - `edits-mcp.mjs` — tiny MCP client so Node can call the Edits app with zero LLM tokens.
 - `media.mjs` — transcript math, dead-air cuts, anchor matching, EDL resolver.
+- `references.mjs`, `netguard.mjs` — real Repo/Site visuals: the director only *proposes* `owner/name` / URL; this verifies them (GitHub API, headless-Chrome screenshot) behind an SSRF guard. Fetched data goes to Remotion only, never to an LLM.
 - `guardrails.mjs` — numeric limits the prompt can only ask for.
 - `prompts.mjs`, `catalog.mjs` — creative doctrine and the options verified to exist in the Edits app.
 - `security.mjs`, `queue.mjs`, `index.mjs` — localhost hardening, one-job-at-a-time queue, HTTP/SSE API.

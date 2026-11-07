@@ -1,5 +1,5 @@
 import React from 'react';
-import {AbsoluteFill, Easing, interpolate, spring, useCurrentFrame, useVideoConfig} from 'remotion';
+import {AbsoluteFill, Easing, getInputProps, Img, interpolate, spring, useCurrentFrame, useVideoConfig} from 'remotion';
 import {loadFont} from '@remotion/google-fonts/Inter';
 import {loadFont as loadMono} from '@remotion/google-fonts/JetBrainsMono';
 import {theme, safe} from './theme';
@@ -274,3 +274,87 @@ export const Compare: React.FC<{left: {title: string; points: string[]}; right: 
     })}
   </Stage>
 );
+
+// ───────── real tool / GitHub visuals (data fetched by the pipeline, passed in as inputProps.assets) ─────────
+type RepoAsset = {repo: string; owner: string; name: string; description: string; stars: number; forks: number; language: string; license: string; archived: boolean; avatar: string | null};
+type SiteAsset = {url: string; domain: string; name: string; title: string; description: string; screenshot: string; icon: string | null};
+const getAssets = () => ((getInputProps() as {assets?: {repos?: Record<string, RepoAsset>; sites?: Record<string, SiteAsset>}}).assets ?? {});
+const compact = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 10_000 ? `${Math.round(n / 1000)}k` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${Math.round(n)}`);
+const clampLines = (n: number): React.CSSProperties => ({display: '-webkit-box', WebkitLineClamp: n, WebkitBoxOrient: 'vertical', overflow: 'hidden'});
+
+const Star: React.FC<{size?: number}> = ({size = 64}) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill={theme.warm}><path d="M12 2l2.9 6.3 6.9.8-5.1 4.7 1.4 6.8L12 17.3 5.9 20.6l1.4-6.8L2.2 9.1l6.9-.8z" /></svg>
+);
+const Fork: React.FC<{size?: number}> = ({size = 52}) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={theme.mute} strokeWidth={2} strokeLinecap="round"><circle cx="6" cy="5" r="2.5" /><circle cx="18" cy="5" r="2.5" /><circle cx="12" cy="19" r="2.5" /><path d="M6 7.5v1.5a3 3 0 003 3h6a3 3 0 003-3V7.5M12 12v4.5" /></svg>
+);
+
+/** A real GitHub repository: avatar, description, ★ count-up, forks, language, license. Data is fetched live and verified. */
+export const Repo: React.FC<{repo: string; tag?: string}> = ({repo, tag = 'GITHUB'}) => {
+  const f = useCurrentFrame();
+  const d = getAssets().repos?.[repo];
+  const [owner, name] = repo.split('/');
+  const stars = d ? interpolate(f, [10, 45], [0, d.stars], {...clamp, easing: Easing.out(Easing.cubic)}) : 0;
+  const pulse = d ? 1 + 0.18 * Math.max(0, Math.sin(Math.min(1, Math.max(0, (f - 45) / 14)) * Math.PI)) : 1;
+  return (
+    <Stage tag={tag}>
+      <div style={{background: theme.card, border: `3px solid ${theme.accent}`, borderRadius: 34, padding: '44px 44px 40px', boxShadow: `0 0 70px ${theme.accent}22`, ...pop(useSpring(0))}}>
+        <div style={{display: 'flex', alignItems: 'center', gap: 30}}>
+          {d?.avatar ? <Img src={d.avatar} style={{width: 124, height: 124, borderRadius: 62, border: `3px solid ${theme.line}`}} /> : <div style={{width: 124, height: 124, borderRadius: 62, background: theme.cardHi, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 60, fontWeight: 800, color: theme.accent}}>{owner[0]?.toUpperCase()}</div>}
+          <div style={{minWidth: 0}}>
+            <div style={{fontSize: 40, color: theme.dim, fontWeight: 500}}>{d?.owner ?? owner} /</div>
+            <div style={{fontSize: 74, fontWeight: 800, lineHeight: 1.05, wordBreak: 'break-word'}}>{d?.name ?? name}</div>
+          </div>
+        </div>
+        {d?.description ? <div style={{fontSize: 42, color: theme.dim, lineHeight: 1.3, marginTop: 34, ...clampLines(3), ...pop(useSpring(8), 20)}}>{d.description}</div> : null}
+        <div style={{height: 3, background: theme.line, margin: '36px 0'}} />
+        <div style={{display: 'flex', alignItems: 'center', gap: 56, flexWrap: 'wrap'}}>
+          <div style={{display: 'flex', alignItems: 'center', gap: 16}}>
+            <div style={{transform: `scale(${pulse})`}}><Star /></div>
+            <div style={{fontSize: 84, fontWeight: 800, color: theme.accent, letterSpacing: -2}}>{d ? compact(stars) : '—'}</div>
+          </div>
+          {d ? <div style={{display: 'flex', alignItems: 'center', gap: 12, fontSize: 46, fontWeight: 700, ...pop(useSpring(16), 16)}}><Fork />{compact(d.forks)}</div> : null}
+        </div>
+        {d && (d.language || d.license) ? (
+          <div style={{display: 'flex', gap: 22, marginTop: 30, fontSize: 36, color: theme.dim, flexWrap: 'wrap', ...pop(useSpring(22), 14)}}>
+            {d.language ? <span style={{display: 'flex', alignItems: 'center', gap: 12}}><span style={{width: 20, height: 20, borderRadius: 10, background: theme.accent}} />{d.language}</span> : null}
+            {d.license ? <span style={{border: `2px solid ${theme.line}`, borderRadius: 16, padding: '2px 18px'}}>{d.license}</span> : null}
+            {d.archived ? <span style={{color: theme.warm}}>archived</span> : null}
+          </div>
+        ) : null}
+      </div>
+    </Stage>
+  );
+};
+
+/** A real tool/site: browser frame with a live screenshot that slowly pans in, plus its icon, name and description. */
+export const Site: React.FC<{url: string; name?: string; tag?: string}> = ({url, name, tag = 'TOOL'}) => {
+  const f = useCurrentFrame();
+  const {durationInFrames} = useVideoConfig();
+  const key = (() => { try { return new URL(url).href; } catch { return url; } })(); // assets are keyed by the canonical href
+  const d = getAssets().sites?.[key];
+  const zoom = interpolate(f, [0, durationInFrames], [1, 1.1], clamp);
+  const panY = interpolate(f, [0, durationInFrames], [0, -24], clamp);
+  const host = d?.domain ?? (() => { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url; } })();
+  const label = name ?? d?.name ?? host;
+  return (
+    <Stage tag={tag}>
+      <div style={{border: `3px solid ${theme.line}`, borderRadius: 28, overflow: 'hidden', background: theme.card, boxShadow: `0 0 70px ${theme.glow}88`, ...pop(useSpring(0))}}>
+        <div style={{display: 'flex', alignItems: 'center', gap: 14, padding: '18px 24px', background: theme.cardHi}}>
+          {['#ff5f57', '#febc2e', '#28c840'].map((c) => <div key={c} style={{width: 18, height: 18, borderRadius: 9, background: c}} />)}
+          <div style={{flex: 1, marginLeft: 12, background: theme.bg, borderRadius: 20, padding: '8px 22px', fontSize: 30, color: theme.dim, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'}}>🔒 {host}</div>
+        </div>
+        <div style={{width: '100%', aspectRatio: '1280 / 800', overflow: 'hidden', background: theme.bg}}>
+          {d?.screenshot ? <Img src={d.screenshot} style={{width: '100%', display: 'block', transform: `scale(${zoom}) translateY(${panY}px)`, transformOrigin: '50% 0%'}} /> : <div style={{height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 64, fontWeight: 800, color: theme.dim}}>{host}</div>}
+        </div>
+      </div>
+      <div style={{display: 'flex', alignItems: 'center', gap: 26, marginTop: 38, ...pop(useSpring(10), 20)}}>
+        {d?.icon ? <Img src={d.icon} style={{width: 84, height: 84, borderRadius: 18, background: '#fff', padding: 6, objectFit: 'contain'}} /> : <div style={{width: 84, height: 84, borderRadius: 18, background: theme.cardHi, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 46, fontWeight: 800, color: theme.accent}}>{label[0]?.toUpperCase()}</div>}
+        <div style={{minWidth: 0}}>
+          <div style={{fontSize: 62, fontWeight: 800, lineHeight: 1.05}}>{label}</div>
+          {d?.description ? <div style={{fontSize: 34, color: theme.dim, marginTop: 8, lineHeight: 1.25, ...clampLines(2)}}>{d.description}</div> : null}
+        </div>
+      </div>
+    </Stage>
+  );
+};

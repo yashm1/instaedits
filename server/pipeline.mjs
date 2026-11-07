@@ -10,6 +10,7 @@ import { runClaude, writeJson } from './claude.mjs';
 import * as P from './prompts.mjs';
 import { EDITS_URL, editsAuthHeaders } from './edits-mcp.mjs';
 import { applyGuardrails } from './guardrails.mjs';
+import { gatherAssets, isRefKind } from './references.mjs';
 import { transcribe, planCuts, tighten, sentences, attachAlt, buildEdl, probe as probeVideo } from './media.mjs';
 
 const REMOTION = config.remotionDir;
@@ -27,6 +28,7 @@ export const STEP_DEFS = (q) => [
   { key: 'tighten', title: 'Cut dead air → tight.mp4', model: 'local (ffmpeg)' },
   { key: 'translate', title: 'Translate speech → English script (non-English only)', model: config.models.translator },
   { key: 'direction', title: 'Creative direction: cards, zooms, captions, music, SFX', model: config.models.director },
+  { key: 'assets', title: 'Fetch real tool & repo visuals (GitHub API + page screenshots)', model: 'local (GitHub API + Chrome)' },
   { key: 'resolve', title: 'Resolve anchors → exact timestamps (EDL)', model: 'local' },
   { key: 'codegen', title: 'Generate Remotion infographics', model: config.models.coder },
   { key: 'render', title: 'Render infographics (Remotion)', model: 'local (Remotion)' },
@@ -83,6 +85,21 @@ export function startJob(job, opts = {}) {
   return queue.enqueue(() => runJob(job, opts));
 }
 
+/**
+ * Jobs saved before a step existed (e.g. 'assets') would silently skip it on resume. Insert any missing step, in canonical
+ * order, as 'pending'. Existing steps and their results are untouched. Returns true if anything changed.
+ */
+export function migrateSteps(state) {
+  const defs = STEP_DEFS(state.quality ?? 'high');
+  const have = new Map(state.steps.map((x) => [x.key, x]));
+  const merged = defs.map((d) => have.get(d.key) ?? { ...d, status: 'pending', log: [], cost: 0, tokens: { in: 0, out: 0 } });
+  const extra = state.steps.filter((x) => !defs.some((d) => d.key === x.key)); // unknown legacy steps stay at the end
+  const next = [...merged, ...extra];
+  const changed = next.length !== state.steps.length || next.some((x, i) => x !== state.steps[i]);
+  state.steps = next;
+  return changed;
+}
+
 /** On boot, anything still 'running'/'queued' was killed with the previous process: mark it resumable instead of stuck forever. */
 export function recoverStaleJobs() {
   let n = 0;
@@ -104,6 +121,7 @@ export function resumeJob(id, from = 'probe') {
   const state = getJob(id);
   if (!state) throw new Error('no such job');
   if (state.status === 'running' || state.status === 'queued') throw new Error(`job is already ${state.status}`);
+  migrateSteps(state);
   const job = { id, dir: path.join(JOBS, id), state, abort: new AbortController() };
   jobs.set(id, job);
   startJob(job, { from }).catch(() => {});
@@ -211,10 +229,28 @@ const STEPS = {
     return r;
   },
 
+  async assets(job, step, log) {
+    const d = JSON.parse(fs.readFileSync(f(job, 'direction.json'), 'utf8'));
+    const files = ['assets.json', 'references.json'].map((n) => f(job, n));
+    if (!d.scenes.some((s) => isRefKind(s.kind))) { files.forEach((x) => fs.rmSync(x, { force: true })); job.state.references = []; return { skipped: 'no tool or GitHub repo is referenced' }; }
+    const { assets, status } = await gatherAssets({ scenes: d.scenes, jobDir: job.dir, log });
+    writeJson(files[0], assets); writeJson(files[1], status);
+    job.state.references = Object.entries(status).map(([id, v]) => ({ id, ...v }));
+    const ok = job.state.references.filter((r) => r.ok).length;
+    log(`${ok}/${job.state.references.length} reference visual(s) ready`);
+  },
+
   async resolve(job, step, log) {
     const { words } = JSON.parse(fs.readFileSync(f(job, 'transcript.json'), 'utf8'));
     const cuts = planCuts(words, job.state.duration);
     const d = JSON.parse(fs.readFileSync(f(job, 'direction.json'), 'utf8'));
+    // A reference card is only kept if its real visuals were fetched and verified.
+    const refStatus = fs.existsSync(f(job, 'references.json')) ? JSON.parse(fs.readFileSync(f(job, 'references.json'), 'utf8')) : {};
+    d.scenes = d.scenes.filter((s) => {
+      if (!isRefKind(s.kind) || refStatus[s.id]?.ok === true) return true;
+      log(`⚠️ dropped ${s.kind} card ${s.id}: ${refStatus[s.id]?.reason ?? 'its visuals were not fetched'}`);
+      return false;
+    });
     const edl = buildEdl(d, words, cuts, log, sentences(words, cuts.toOut), job.state.language);
     writeJson(f(job, 'edl.json'), edl);
     writeJson(f(job, 'scenes.json'), { remotion_brief: d.remotion_brief, scenes: edl.scenes.map(({ id, kind, dur, props }) => ({ id, kind, dur, props })) });
@@ -245,7 +281,7 @@ const STEPS = {
       try {
         log('typecheck…');
         execFileSync('npx', ['tsc', '--noEmit'], { cwd: REMOTION, encoding: 'utf8', stdio: 'pipe' });
-        await sh('node', ['render.mjs', f(job, 'clips')], REMOTION, (l) => {
+        await sh('node', ['render.mjs', f(job, 'clips'), ...(fs.existsSync(f(job, 'assets.json')) ? [f(job, 'assets.json')] : [])], REMOTION, (l) => {
           try { const e = JSON.parse(l); log(e.finished ? '✅ all scenes rendered' : e.done ? `${e.id} done` : e.skipped ? `${e.id} cached` : `${e.id} ${e.progress}%`); } catch { log(l.slice(0, 160)); }
         }, job.abort.signal);
         return total;
