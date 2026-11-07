@@ -11,7 +11,7 @@ import * as P from './prompts.mjs';
 import { EDITS_URL, editsAuthHeaders } from './edits-mcp.mjs';
 import { applyGuardrails } from './guardrails.mjs';
 import { gatherAssets, isRefKind } from './references.mjs';
-import { transcribe, planCuts, tighten, sentences, attachAlt, buildEdl, probe as probeVideo } from './media.mjs';
+import { transcribe, detectLanguage, planCuts, tighten, sentences, attachAlt, buildEdl, probe as probeVideo } from './media.mjs';
 
 const REMOTION = config.remotionDir;
 const JOBS = config.jobsDir;
@@ -47,11 +47,11 @@ export function listJobs() {
 export const getJob = (id) => !isSafeId(id) ? null : jobs.get(id)?.state ?? (fs.existsSync(path.join(JOBS, id, 'state.json')) ? JSON.parse(fs.readFileSync(path.join(JOBS, id, 'state.json'), 'utf8')) : null);
 
 const BUDGET_KEYS = ['direction', 'translate', 'codegen', 'edit'];
-export function createJob({ script = '', video, quality = 'high', budgets = {}, jobId, dryRun = false, language = 'en' }) {
+export function createJob({ script = '', video, quality = 'high', budgets = {}, jobId, dryRun = false, language = 'auto' }) {
   // The script is OPTIONAL: without one we transcribe the speech (and translate it to English if it isn't English).
   if (script !== null && typeof script !== 'string') throw new Error('script must be text');
   script = (script ?? '').trim();
-  if (typeof language !== 'string' || !/^[a-z]{2,3}$/.test(language)) throw new Error('language must be a 2-3 letter code like "en" or "hi"');
+  if (typeof language !== 'string' || !(language === 'auto' || /^[a-z]{2,3}$/.test(language))) throw new Error('language must be "auto" or a 2-3 letter code like "en" or "hi"');
   if (!['high', 'fast'].includes(quality)) throw new Error('quality must be "high" or "fast"');
   video = validateVideoPath(video);
   if (jobId !== undefined && !isSafeId(jobId)) throw new Error('invalid job id');
@@ -169,7 +169,14 @@ const STEPS = {
   async transcribe(job, step, log) {
     // Edits is sandboxed: hand it a link to the source inside its staging folder, not the original path.
     const src = stageFile(job.state.video, path.join(stagingFor(job.id), `source${path.extname(job.state.video).toLowerCase()}`));
-    await transcribe(src, job.dir, log, job.state.language);
+    const st = job.state;
+    // 'auto' (the default) transcribes with the English model — in practice it handles Hindi and keeps English terms — then detects the script.
+    const t = await transcribe(src, job.dir, log, st.language === 'auto' ? 'en' : st.language);
+    const detected = detectLanguage(t.words);
+    if ((st.language === 'auto' || st.language === 'en') && detected !== 'en') {
+      log(`🌐 the speech is ${detected}, not English — switching to translate-to-English mode`);
+      st.language = detected; st.languageDetected = true;
+    } else if (st.language === 'auto') st.language = 'en';
   },
 
   async tighten(job, step, log) {
@@ -312,7 +319,8 @@ const STEPS = {
       mcpServers: editsMcpServers(), allowed: `mcp__${config.editsServer}`, tools: '', cwd: job.dir,
       budget: job.state.budgets.edit, onEvent: log, signal: job.abort.signal,
     });
-    log(`↩ ${r.text.slice(0, 300)}`);
+    job.state.editorReport = r.text.slice(0, 3000); // the editor's own account, incl. any deviations from the EDL
+    log(`↩ ${r.text.slice(0, 2000)}`);
     return r;
   },
 

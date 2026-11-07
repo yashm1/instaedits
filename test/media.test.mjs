@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { planCuts, findAnchor, sentences, attachAlt, buildEdl } from '../server/media.mjs';
+import { planCuts, findAnchor, sentences, attachAlt, buildEdl, detectLanguage } from '../server/media.mjs';
 
 const W = (s, a, b) => ({ w: s, start: a, end: b });
 const words = [
@@ -225,4 +225,43 @@ test('attachAlt tolerates cross-pass timing jitter: a word starting 0.2s before 
   const r = attachAlt(sents, [W('early', 4.8, 5.1), W('late', 4.6, 4.9)], (t) => t);
   assert.equal(r[1].alt, 'early'); // 4.8 ≥ 5 − 0.3
   assert.equal(r[0].alt, 'late');  // 4.6 < 4.7: still the previous sentence
+});
+
+// ───────── non-Latin scripts in the word-anchor path (the bug that dropped 4 of 5 cards on a real Hindi reel) ─────────
+const REEL = 'ओ भाई, ये पूरा वीडियो क्लॉड ने एडिट किया है। तो रिसेंटली Instagram ने एडिट्स ऐप लॉन्च किया है फॉर द डेस्कटॉप। अब इसमें तुम ऑटोमेशन सर्वर रन कर सकते हो थ्रू क्लॉड कोड एक्स एंड जेमिन। इसके बाद में तुम्हें इस GitHub रेपोजिटरी पे जाना है।'.split(' ');
+const reelWords = (() => { let t = 0.3; return REEL.map((w) => { const x = W(w, t, t + 0.4); t += 0.42; return x; }); })();
+
+test('findAnchor matches Devanagari phrases (matras, punctuation and danda are handled)', () => {
+  assert.equal(findAnchor(reelWords, 'ओ भाई, ये पूरा'), 0);
+  const i = findAnchor(reelWords, 'अब इसमें तुम ऑटोमेशन');
+  assert.equal(reelWords[i].w, 'अब');
+  assert.equal(reelWords[findAnchor(reelWords, 'इसके बाद में तुम्हें इस')].w, 'इसके');
+  assert.equal(reelWords[findAnchor(reelWords, 'जेमिन। इसके बाद')].w, 'जेमिन।', 'danda inside the anchor is ignored');
+});
+
+test('findAnchor matches mixed Devanagari + Latin phrases', () => {
+  const i = findAnchor(reelWords, 'तो रिसेंटली Instagram ने');
+  assert.equal(reelWords[i].w, 'तो');
+  assert.notEqual(findAnchor(reelWords, 'इस GitHub रेपोजिटरी'), -1);
+});
+
+test('different Devanagari words do not collide just because marks were stripped', () => {
+  const ws = [W('का', 0, .3), W('कि', .3, .6), W('की', .6, .9), W('को', .9, 1.2)];
+  assert.equal(findAnchor(ws, 'की'), 2); assert.equal(findAnchor(ws, 'को'), 3); assert.equal(findAnchor(ws, 'कि'), 1);
+});
+
+test('buildEdl places cards on Hindi verbatim anchors (nothing dropped for being non-Latin)', () => {
+  const c = planCuts(reelWords, 20); const logs = [];
+  const d = dir2([{ anchor: 'ओ भाई, ये पूरा', kind: 'Hook' }, { anchor: 'अब इसमें तुम ऑटोमेशन' }]);
+  const e = buildEdl(d, reelWords, c, (m) => logs.push(m));
+  assert.equal(e.scenes.length, 2); assert.ok(!logs.some((l) => /anchor not found/.test(l)));
+});
+
+test('detectLanguage: Devanagari-dominant → hi; English/romanised → en; mixed Hinglish with Devanagari majority → hi; empty → en', () => {
+  assert.equal(detectLanguage(reelWords), 'hi');
+  assert.equal(detectLanguage([W('Kafka', 0, 1), W('is', 1, 2), W('fast', 2, 3)]), 'en');
+  assert.equal(detectLanguage('kya aap ready hain'.split(' ').map((w, i) => W(w, i, i + 1))), 'en', 'romanised Hindi is Latin: not detectable by script, stays as declared');
+  assert.equal(detectLanguage('नमस्ते दोस्तों Kafka'.split(' ').map((w, i) => W(w, i, i + 1))), 'hi');
+  assert.equal(detectLanguage([]), 'en');
+  assert.equal(detectLanguage([W('99.99%', 0, 1)]), 'en');
 });
