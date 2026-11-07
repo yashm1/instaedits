@@ -12,12 +12,16 @@ import { applyGuardrails } from './guardrails.mjs';
 import { gatherAssets, isRefKind } from './references.mjs';
 import { transcribe, detectLanguage, planCuts, tighten, sentences, attachAlt, buildEdl, probe as probeVideo } from './media.mjs';
 import { captureScreens, SCREENS } from './screens.mjs';
-import { captionLines, splitWindows } from './captions.mjs';
+import { linesFromWords, latinLine, hasDevanagari, captionY, splitWindows } from './captions.mjs';
+import { keyOf, fileKey, treeKey, getJson, putJson, restoreFile, storeFile, prune } from './cache.mjs';
 import { runEdit } from './editor.mjs';
 import { checkExport } from './qa.mjs';
 import { writeGraph, compositeArgs } from './composite.mjs';
 
 const REMOTION = config.remotionDir;
+// Bump when HOW a step produces its output changes, so old cache entries are not reused.
+const AUDIO_RECIPE = 'edits-audio-v1 voice(0.35,0.5) export(720p,2M)';
+const COMPOSITE_RECIPE = 'x264-crf14-medium yuvj420p bt709 loudnorm-14';
 const JOBS = config.jobsDir;
 const queue = createQueue();
 
@@ -25,18 +29,22 @@ export const bus = new EventEmitter();
 const jobs = new Map();
 
 export const STEPS_FOR_TEST = () => STEPS;
+// `group`: consecutive steps with the same group run IN PARALLEL (they only depend on earlier steps).
 export const STEP_DEFS = (q) => [
   { key: 'probe', title: 'Probe video', model: 'local (ffprobe)' },
-  { key: 'transcribe', title: 'Word-level transcript', model: 'local (Edits captions model)' },
-  { key: 'tighten', title: 'Cut dead air → tight.mp4', model: 'local (ffmpeg)' },
+  { key: 'transcribe', title: 'Word-level transcript (cached per video)', model: 'local (Edits captions model)' },
+  { key: 'tighten', title: 'Cut dead air → tight.mp4 (cached per video)', model: 'local (ffmpeg)' },
   { key: 'translate', title: 'Translate speech → English script (non-English only)', model: config.models.translator },
   { key: 'direction', title: 'Understand the video + creative direction (cards, screenshots, music, SFX)', model: config.models.director },
   { key: 'assets', title: 'Fetch real tool & repo visuals (GitHub API + page screenshots)', model: 'local (GitHub API + Chrome)' },
   { key: 'resolve', title: 'Resolve anchors → exact timestamps (EDL)', model: 'local' },
-  { key: 'edit', title: 'Edits app: captions (→ Hinglish), music, SFX, voice — audio mix + caption timing', model: `local (Edits tool calls) + ${config.models.captions} for Hinglish` },
-  { key: 'render', title: 'Render graphics + captions (Remotion) over your ORIGINAL footage (ffmpeg, colour untouched)', model: 'local (Remotion + ffmpeg)' },
-  { key: 'verify', title: q === 'high' ? 'QA: check the export + watch it before publishing' : 'QA: check the export', model: q === 'high' ? `local (ffmpeg) + ${config.models.reviewer}` : 'local (ffmpeg)' },
+  { key: 'captions', title: 'Captions from the transcript → Latin-script Hinglish lines', model: config.models.captions },
+  { key: 'audio', title: 'Edits app: licensed music, SFX, voice enhance → audio mix', model: 'local (Edits tool calls)', group: 'produce' },
+  { key: 'graphics', title: 'Render graphics + captions (Remotion, transparent)', model: 'local (Remotion)', group: 'produce' },
+  { key: 'composite', title: 'Composite over your ORIGINAL footage (ffmpeg, colour untouched)', model: 'local (ffmpeg)' },
+  { key: 'verify', title: q === 'high' ? 'QA: check the final reel + watch it before publishing' : 'QA: check the final reel', model: q === 'high' ? `local (ffmpeg) + ${config.models.reviewer}` : 'local (ffmpeg)' },
 ];
+const groupOf = (key) => STEP_DEFS('high').find((d) => d.key === key)?.group ?? null;
 
 const save = (job) => { writeJson(path.join(job.dir, 'state.json'), job.state); bus.emit(job.id, job.state); };
 
@@ -148,24 +156,36 @@ export async function runJob(job, { from = 'probe' } = {}) {
   if (startIdx < 0) throw new Error(`unknown step: ${from}`);
   if (job.abort.signal.aborted) { s.status = 'cancelled'; save(job); return; }
   s.status = 'running'; save(job);
+  const runStep = async (step) => {
+    if (s.dryRun && (step.key === 'audio' || step.key === 'verify')) { step.status = 'skipped'; step.log = ['dry run — Edits app not used']; save(job); return; }
+    step.status = 'running'; step.startedAt = Date.now(); step.log = []; delete step.error; save(job); // a re-run must not show the previous attempt's error
+    const log = (m) => { step.log.push(m); if (step.log.length > 80) step.log.shift(); save(job); };
+    try {
+      const r = await STEPS[step.key](job, step, log);
+      if (r?.skipped) { step.status = 'skipped'; step.cost = 0; log(`↷ ${r.skipped}`); return; }
+      step.cost = r?.cost ?? 0; step.tokens = r?.tokens ?? { in: 0, out: 0 };
+      step.status = 'done';
+    } catch (e) {
+      step.status = 'error'; step.error = e.message; log(`❌ ${e.message}`);
+      throw e;
+    } finally { step.endedAt = Date.now(); save(job); }
+  };
   try {
-    for (const step of s.steps.slice(startIdx)) {
-      if (s.dryRun && (step.key === 'edit' || step.key === 'verify')) { step.status = 'skipped'; step.log = ['dry run — Edits step skipped']; save(job); continue; }
-      step.status = 'running'; step.startedAt = Date.now(); step.log = []; delete step.error; save(job); // a re-run must not show the previous attempt's error
-      const log = (m) => { step.log.push(m); if (step.log.length > 80) step.log.shift(); save(job); };
-      try {
-        const r = await STEPS[step.key](job, step, log);
-        if (r?.skipped) { step.status = 'skipped'; step.cost = 0; log(`↷ ${r.skipped}`); continue; }
-        if (r) { step.cost = r.cost ?? 0; step.tokens = r.tokens ?? step.tokens; }
-        step.status = 'done';
-      } catch (e) {
-        step.status = 'error'; step.error = e.message; log(`❌ ${e.message}`);
-        throw e;
-      } finally { step.endedAt = Date.now(); save(job); }
+    const todo = s.steps.slice(startIdx);
+    for (let i = 0; i < todo.length;) {
+      const g = groupOf(todo[i].key);
+      let j = i + 1;
+      while (g && j < todo.length && groupOf(todo[j].key) === g) j++;
+      const batch = todo.slice(i, j);
+      const results = await Promise.allSettled(batch.map(runStep)); // a group runs in parallel; every member finishes
+      const failed = results.find((r) => r.status === 'rejected');
+      if (failed) throw failed.reason;
+      i = j;
     }
     s.status = 'done';
   } catch (e) { s.status = job.abort.signal.aborted ? 'cancelled' : 'error'; }
   s.totalCost = s.steps.reduce((a, x) => a + x.cost, 0);
+  s.totalSeconds = Math.round(s.steps.filter((x) => x.startedAt).reduce((a, x) => Math.max(a, x.endedAt ?? 0), 0) / 1000 - Math.min(...s.steps.filter((x) => x.startedAt).map((x) => x.startedAt)) / 1000);
   save(job);
 }
 
@@ -185,7 +205,19 @@ const STEPS = {
     const src = stageFile(job.state.video, path.join(stagingFor(job.id), `source${path.extname(job.state.video).toLowerCase()}`));
     const st = job.state;
     // 'auto' (the default) transcribes with the English model — in practice it handles Hindi and keeps English terms — then detects the script.
-    const t = await transcribe(src, job.dir, log, st.language === 'auto' ? 'en' : st.language);
+    // Cached by the video's CONTENT: the same clip is never uploaded and transcribed twice (any job, any re-run).
+    const lang = st.language === 'auto' ? 'en' : st.language;
+    const key = keyOf('transcript', fileKey(job.state.video), lang);
+    const hit = getJson('transcripts', key);
+    if (hit) {
+      writeJson(f(job, 'transcript.json'), { words: hit.words });
+      if (hit.alt) writeJson(f(job, 'transcript.alt.json'), { words: hit.alt }); else fs.rmSync(f(job, 'transcript.alt.json'), { force: true });
+      log(`♻️ same video as a previous run — transcript reused (${hit.words.length} words, no upload)`);
+    } else if (!fs.existsSync(f(job, 'transcript.json'))) {
+      await transcribe(src, job.dir, log, lang);
+    }
+    const t = JSON.parse(fs.readFileSync(f(job, 'transcript.json'), 'utf8'));
+    if (!hit) putJson('transcripts', key, { words: t.words, alt: fs.existsSync(f(job, 'transcript.alt.json')) ? JSON.parse(fs.readFileSync(f(job, 'transcript.alt.json'), 'utf8')).words : null });
     const detected = detectLanguage(t.words);
     if ((st.language === 'auto' || st.language === 'en') && detected !== 'en') {
       log(`🌐 the speech is ${detected}, not English — switching to translate-to-English mode`);
@@ -198,8 +230,10 @@ const STEPS = {
     const cuts = planCuts(words, job.state.duration);
     writeJson(f(job, 'cuts.json'), cuts.segs);
     job.state.tight = { duration: +cuts.total.toFixed(2), saved: +cuts.saved.toFixed(2) };
-    if (fs.existsSync(f(job, 'tight.mp4'))) { log('♻️ tight.mp4 cached'); return; }
+    const key = keyOf('tight', fileKey(job.state.video), cuts.segs);
+    if (restoreFile('tight', key, '.mp4', f(job, 'tight.mp4'))) { log('♻️ same video + same cuts — tight.mp4 reused'); return; }
     await tighten(job.state.video, cuts.segs, f(job, 'tight.mp4'), log, job.abort.signal);
+    storeFile('tight', key, '.mp4', f(job, 'tight.mp4'));
     log(`${job.state.duration.toFixed(1)}s → ${cuts.total.toFixed(1)}s (−${cuts.saved.toFixed(1)}s dead air)`);
   },
 
@@ -211,11 +245,10 @@ const STEPS = {
     const altFile = f(job, 'transcript.alt.json');
     const sents = attachAlt(sentences(words, cuts.toOut), fs.existsSync(altFile) ? JSON.parse(fs.readFileSync(altFile, 'utf8')).words : [], cuts.toOut);
     const cache = f(job, 'sentences.json');
-    if (fs.existsSync(cache)) { st.scriptEn = JSON.parse(fs.readFileSync(cache, 'utf8')).map((x) => x.en).join(' '); log('♻️ translation cached'); return; }
     const r = await runClaude({
       model: config.models.translator, system: P.TRANSLATE_SYSTEM, schema: P.TRANSLATE_SCHEMA, effort: 'low',
       prompt: P.translatePrompt({ sentences: sents, language: st.language, reference: st.script, terms: st.terms ?? config.defaultTerms }),
-      cwd: job.dir, budget: st.budgets.translate ?? config.budgets.translate, onEvent: log, signal: job.abort.signal,
+      cwd: job.dir, budget: st.budgets.translate ?? config.budgets.translate, onEvent: log, signal: job.abort.signal, cache: true,
     });
     const out = r.structured ?? JSON.parse(r.text.match(/\{[\s\S]*\}/)[0]);
     const en = new Map(out.sentences.map((x) => [x.n, String(x.en ?? '').trim()]));
@@ -235,7 +268,6 @@ const STEPS = {
     const shots = await captureScreens({ log });
     st.screens = Object.keys(shots);
     const available = Object.fromEntries(st.screens.map((k) => [k, SCREENS[k]]));
-    if (fs.existsSync(f(job, 'direction.json'))) { log('♻️ direction.json exists — reusing (no tokens spent)'); return; }
     const { words } = JSON.parse(fs.readFileSync(f(job, 'transcript.json'), 'utf8'));
     const cuts = planCuts(words, st.duration);
     const library = fs.readFileSync(path.join(REMOTION, 'LIBRARY.md'), 'utf8').split('\n').filter((l) => l.startsWith('- `') || l.startsWith('Icons')).join('\n');
@@ -244,7 +276,7 @@ const STEPS = {
     const r = await runClaude({
       model: config.models.director, system: P.DIRECTOR_SYSTEM, schema: P.DIRECTOR_SCHEMA, effort: 'medium',
       prompt: P.directorPrompt({ sentences: sents, duration: cuts.total, library, indexed, language: st.language, screens: available, links: st.links ?? [], terms: st.terms ?? [] }),
-      cwd: job.dir, budget: st.budgets.direction, onEvent: log, signal: job.abort.signal,
+      cwd: job.dir, budget: st.budgets.direction, onEvent: log, signal: job.abort.signal, cache: true, // same speech + options → same plan, 0 tokens
     });
     const raw = r.structured ?? JSON.parse(r.text.match(/\{[\s\S]*\}/)[0]);
     const { direction: d, notes } = applyGuardrails(raw, { totalSeconds: cuts.total, scriptWordCount: words.length, screens: available });
@@ -259,7 +291,7 @@ const STEPS = {
     const d = JSON.parse(fs.readFileSync(f(job, 'direction.json'), 'utf8'));
     // Screens used by the plan → into the job folder (Remotion's public dir for this render)
     fs.rmSync(f(job, 'screens'), { recursive: true, force: true });
-    const shots = [...new Set(d.scenes.filter((s) => s.kind === 'Screen').map((s) => s.props.shot))];
+    const shots = [...new Set(d.scenes.filter((s) => s.kind === 'Screen' || (s.kind === 'Hook' && s.props?.shot)).map((s) => s.props.shot))];
     if (shots.length) {
       fs.mkdirSync(f(job, 'screens'));
       for (const k of shots) { const src = path.join(config.screensDir, `${k}.png`); if (fs.existsSync(src)) fs.copyFileSync(src, f(job, 'screens', `${k}.png`)); }
@@ -289,64 +321,85 @@ const STEPS = {
     const edl = buildEdl(d, words, cuts, log, sentences(words, cuts.toOut), job.state.language);
     writeJson(f(job, 'edl.json'), edl);
     writeJson(f(job, 'reel.json'), reelProps(job, edl));
-    fs.rmSync(f(job, 'reel.mp4'), { force: true }); // stale render from an older plan
     log(`${edl.scenes.length} cards · ${edl.zooms.length} zooms · ${edl.sfx.length} sfx`);
     job.state.edl = { cards: edl.scenes.map((s) => `${s.start}s ${s.kind}${s.word ? ` on “${s.word}”` : ''} (${s.dur}s)`), zooms: edl.zooms.length, sfx: edl.sfx.length };
   },
 
-  async edit(job, step, log) {
+  async captions(job, step, log) {
     const st = job.state;
     const edl = JSON.parse(fs.readFileSync(f(job, 'edl.json'), 'utf8'));
-    const stage = stagingFor(job.id);
-    const video = stageFile(f(job, 'tight.mp4'), path.join(stage, 'tight.mp4'));
-    const out = path.join(stage, 'edits.mp4'); // Edits can write here; it cannot write into jobs/. Used for AUDIO only.
-    fs.rmSync(out, { force: true });
-    log(`staged for Edits → ${stage}`);
     const { words } = JSON.parse(fs.readFileSync(f(job, 'transcript.json'), 'utf8'));
     const cuts = planCuts(words, st.duration);
-    const reelWords = words.map((w) => ({ start: cuts.toOut(w.start), end: cuts.toOut(w.end) }));
-    const usage = { cost: 0, tokens: { in: 0, out: 0 } };
-    const transliterate = async (lines) => {
-      const r = await runClaude({
-        model: config.models.captions, system: P.TRANSLIT_SYSTEM, schema: P.TRANSLIT_SCHEMA, effort: 'low',
-        prompt: P.translitPrompt({ lines, terms: st.terms ?? [] }), cwd: job.dir, budget: st.budgets.captions ?? config.budgets.captions, onEvent: () => {}, signal: job.abort.signal,
-      });
-      usage.cost += r.cost ?? 0; usage.tokens.in += r.tokens?.in ?? 0; usage.tokens.out += r.tokens?.out ?? 0;
-      const o = r.structured ?? JSON.parse(r.text.match(/\{[\s\S]*\}/)[0]);
+    // exact word times from the transcript on the reel timeline → ≤3-word lines
+    const lines = linesFromWords(words.map((w) => ({ text: w.w, start: cuts.toOut(w.start), end: cuts.toOut(w.end) })));
+    let r = null, fallback = 0;
+    if (st.language !== 'en' || lines.some((l) => l.words.some((w) => hasDevanagari(w.text)))) {
+      const tokens = lines.map((l) => l.words.map((w) => w.text));
+      r = await runClaude({
+        model: config.models.captions, system: P.TRANSLIT_SYSTEM, schema: P.TRANSLIT_SCHEMA, effort: 'low', cache: true,
+        prompt: P.translitPrompt({ lines: tokens, terms: st.terms ?? [] }), cwd: job.dir, budget: st.budgets.captions ?? config.budgets.captions, onEvent: log, signal: job.abort.signal,
+      }).catch((e) => { log(`⚠️ Hinglish model failed (${e.message.slice(0, 80)}) — rule-based fallback`); return null; });
+      const o = r ? (r.structured ?? JSON.parse(r.text.match(/\{[\s\S]*\}/)[0])) : { lines: [] };
       const byN = new Map(o.lines.map((x) => [x.n, x.words]));
-      return lines.map((_, i) => byN.get(i + 1) ?? null);
-    };
-    const { report, captions } = await runEdit({ video, edl, out, words: reelWords, transliterate, log });
-    writeJson(f(job, 'captions.json'), captionLines(captions, reelWords, splitWindows(edl.scenes)));
-    st.editorReport = report.join('\n');
-    return usage;
+      lines.forEach((l, i) => {
+        const llm = byN.get(i + 1);
+        const latin = latinLine(tokens[i], llm);
+        if (!llm || latin.join(' ') !== llm.map((w) => String(w).trim()).join(' ')) fallback++;
+        l.words.forEach((w, j) => { w.text = latin[j]; });
+      });
+    }
+    const wins = splitWindows(edl.scenes);
+    writeJson(f(job, 'captions.json'), lines.map((l) => ({ ...l, y: captionY({ startTime: l.start, endTime: l.end }, wins) })));
+    log(`${lines.length} caption lines${st.language !== 'en' ? ` in Latin-script Hinglish${fallback ? ` (${fallback} via fallback)` : ''}` : ''}`);
+    return r;
   },
 
-  async render(job, step, log) {
+  async audio(job, step, log) {
+    const edl = JSON.parse(fs.readFileSync(f(job, 'edl.json'), 'utf8'));
+    // cached by everything that shapes the mix: the speech clip, the music choice, the SFX list
+    const key = keyOf('audio', fileKey(f(job, 'tight.mp4')), edl.music ?? null, edl.sfx ?? [], AUDIO_RECIPE);
+    if (restoreFile('audio', key, '.m4a', f(job, 'audio.m4a'))) { log('♻️ same speech + music + SFX — Edits audio mix reused (Edits not opened)'); return; }
+    const stage = stagingFor(job.id);
+    const video = stageFile(f(job, 'tight.mp4'), path.join(stage, 'tight.mp4'));
+    const out = path.join(stage, 'edits.mp4'); // Edits can write here; it cannot write into jobs/. Only its AUDIO is used.
+    fs.rmSync(out, { force: true });
+    const { report } = await runEdit({ video, edl, out, log });
+    await sh('ffmpeg', ['-y', '-loglevel', 'error', '-i', out, '-vn', '-c:a', 'copy', f(job, 'audio.m4a')], job.dir, () => {}, job.abort.signal);
+    storeFile('audio', key, '.m4a', f(job, 'audio.m4a'));
+    job.state.editorReport = report.join('\n');
+  },
+
+  async graphics(job, step, log) {
+    // Remotion renders ONLY graphics + captions (transparent ProRes 4444): the speaker is never re-encoded by Chrome.
+    const props = { ...JSON.parse(fs.readFileSync(f(job, 'reel.json'), 'utf8')), overlayOnly: true, captions: JSON.parse(fs.readFileSync(f(job, 'captions.json'), 'utf8')) };
+    writeJson(f(job, 'reel.overlay.json'), props);
+    await sh('node', ['track.mjs', f(job, 'reel.json'), f(job, 'track.json')], REMOTION, () => {}, job.abort.signal);
+    const files = fs.existsSync(f(job, 'screens')) ? fs.readdirSync(f(job, 'screens')).sort().map((n) => fileKey(f(job, 'screens', n))) : [];
+    const key = keyOf('overlay', props, treeKey(path.join(REMOTION, 'src')), files);
+    job.state.overlayKey = key;
+    if (restoreFile('overlay', key, '.mov', f(job, 'overlay.mov'))) { log('♻️ same cards + captions + library — graphics reused (no render)'); return; }
     log('typecheck…');
     execFileSync('npx', ['tsc', '--noEmit'], { cwd: REMOTION, encoding: 'utf8', stdio: 'pipe' });
-    const stage = stagingFor(job.id);
-    const editsAudio = path.join(stage, 'edits.mp4');
-    const hasEdits = !job.state.dryRun && fs.existsSync(editsAudio);
-    // 1) Remotion renders ONLY graphics + captions (transparent ProRes 4444). Neither Chrome nor Edits ever re-encodes
-    //    the speaker: both shifted the camera's colour by a few levels.
-    const props = JSON.parse(fs.readFileSync(f(job, 'reel.json'), 'utf8'));
-    const captions = fs.existsSync(f(job, 'captions.json')) ? JSON.parse(fs.readFileSync(f(job, 'captions.json'), 'utf8')) : [];
-    writeJson(f(job, 'reel.overlay.json'), { ...props, overlayOnly: true, captions });
     await sh('node', ['render.mjs', f(job, 'reel.overlay.json'), job.dir, f(job, 'overlay.mov')], REMOTION, (l) => {
-      try { const e = JSON.parse(l); log(e.finished ? `✅ graphics${captions.length ? ` + ${captions.length} caption lines` : ''} rendered` : `graphics ${e.progress}%`); } catch { log(l.slice(0, 160)); }
+      try { const e = JSON.parse(l); log(e.finished ? `✅ graphics + ${props.captions.length} caption lines rendered` : `graphics ${e.progress}%`); } catch { log(l.slice(0, 160)); }
     }, job.abort.signal);
-    // 2) per-frame speaker placement from the same geometry code the graphics used
-    await sh('node', ['track.mjs', f(job, 'reel.json'), f(job, 'track.json')], REMOTION, () => {}, job.abort.signal);
-    const { track } = JSON.parse(fs.readFileSync(f(job, 'track.json'), 'utf8'));
-    // 3) ffmpeg: original camera pixels moved/zoomed only, graphics + captions on top, the Edits audio mix (music, SFX,
-    //    enhanced voice) at -14 LUFS, encoded with the camera's own colour description
-    fs.mkdirSync(stage, { recursive: true });
+    storeFile('overlay', key, '.mov', f(job, 'overlay.mov'));
+    prune('overlay', config.cacheMaxBytes * 0.7);
+  },
+
+  async composite(job, step, log) {
+    const stage = stagingFor(job.id); fs.mkdirSync(stage, { recursive: true });
     const out = path.join(stage, 'final.mp4');
-    fs.rmSync(out, { force: true });
-    log(`compositing your original footage under the graphics (colour untouched)${hasEdits ? ', audio from Edits' : ''}…`);
-    const graphFile = writeGraph(job.dir, { track, duration: props.duration, audioInput: hasEdits ? 2 : 0 });
-    await sh('ffmpeg', compositeArgs({ tight: f(job, 'tight.mp4'), overlay: f(job, 'overlay.mov'), graphFile, out, audio: hasEdits ? editsAudio : null }), job.dir, () => {}, job.abort.signal);
+    const audio = !job.state.dryRun && fs.existsSync(f(job, 'audio.m4a')) ? f(job, 'audio.m4a') : null;
+    const { track } = JSON.parse(fs.readFileSync(f(job, 'track.json'), 'utf8'));
+    const key = keyOf('final', fileKey(f(job, 'tight.mp4')), job.state.overlayKey ?? fileKey(f(job, 'overlay.mov')), audio ? fileKey(audio) : 'camera', track, COMPOSITE_RECIPE);
+    if (restoreFile('final', key, '.mp4', out)) { log(`♻️ identical inputs — final reel reused → ${out}`); return; }
+    const props = JSON.parse(fs.readFileSync(f(job, 'reel.json'), 'utf8'));
+    log(`compositing your original footage under the graphics (colour untouched)${audio ? ', audio from Edits' : ''}…`);
+    const graphFile = writeGraph(job.dir, { track, duration: props.duration, audioInput: audio ? 2 : 0 });
+    await sh('ffmpeg', compositeArgs({ tight: f(job, 'tight.mp4'), overlay: f(job, 'overlay.mov'), graphFile, out, audio }), job.dir, () => {}, job.abort.signal);
+    storeFile('final', key, '.mp4', out);
+    prune('final', config.cacheMaxBytes * 0.3);
     log(`✅ final.mp4 → ${out}`);
   },
 
@@ -358,22 +411,25 @@ const STEPS = {
     const track = fs.existsSync(f(job, 'track.json')) ? JSON.parse(fs.readFileSync(f(job, 'track.json'), 'utf8')).track : null;
     const qa = await checkExport({ final: out, overlay: f(job, 'overlay.mov'), original: f(job, 'tight.mp4'), track, scenes: edl.scenes, dir: job.dir });
     log(`colour vs your original: ${qa.fidelity ? `max drift ${qa.fidelity.maxDrift} levels` : 'n/a'} · speaker saturation ${qa.colourRatio}× the original · ${qa.cards.filter((c) => c.similarity >= 0.55).length}/${qa.cards.length} cards on screen at their time`);
-    st.qa = { ok: qa.ok, problems: qa.problems };
+    st.qa = { ok: qa.ok, problems: qa.problems, colourDrift: qa.fidelity?.maxDrift ?? null, cards: `${qa.cards.filter((c) => c.similarity >= 0.55).length}/${qa.cards.length}` };
     if (!qa.ok) throw new Error(`QA failed: ${qa.problems.join('; ')}`);
     st.output = out;
-    fs.rmSync(f(job, 'overlay.mov'), { force: true }); // ~1 GB of ProRes, only needed for the card check
+    fs.rmSync(f(job, 'overlay.mov'), { force: true }); // a hard link: the cached copy stays for the next run
     if (st.quality !== 'high' || !qa.frames.length) { log(`final.mp4 ✔ → ${out}`); return; }
     // watch it: a vision model checks each card against what is being said at that moment
     const sents = sentences(JSON.parse(fs.readFileSync(f(job, 'transcript.json'), 'utf8')).words, planCuts(JSON.parse(fs.readFileSync(f(job, 'transcript.json'), 'utf8')).words, st.duration).toOut);
     const en = fs.existsSync(f(job, 'sentences.json')) ? JSON.parse(fs.readFileSync(f(job, 'sentences.json'), 'utf8')) : sents;
     const saidAt = (t) => { const s = [...en].reverse().find((x) => x.t <= t + 0.05) ?? en[0]; return s?.en ?? s?.text ?? ''; };
+    const rk = keyOf('review', fileKey(out), st.direction?.concept ?? '');
+    const cachedReview = getJson('review', rk);
+    if (cachedReview) { st.review = cachedReview; log(`♻️ same final reel — review reused: ${cachedReview.verdict}`); log(`final.mp4 ✔ → ${out}`); return; }
     const r = await runClaude({
       model: config.models.reviewer, schema: P.REVIEW_SCHEMA, tools: 'Read', allowed: 'Read', effort: 'low',
       prompt: P.reviewPrompt({ contact: qa.contact, frames: qa.frames.map((x) => ({ ...x, said: saidAt(x.t) })), concept: st.direction?.concept ?? '' }),
       cwd: job.dir, budget: st.budgets.review ?? config.budgets.review, onEvent: () => {}, signal: job.abort.signal,
     });
     const v = r.structured ?? JSON.parse(r.text.match(/\{[\s\S]*\}/)[0]);
-    st.review = v;
+    st.review = v; putJson('review', rk, v);
     log(v.verdict === 'publish' ? '👀 review: ready to publish' : `👀 review: ${v.issues.length} issue(s)`);
     v.issues.forEach((i) => log(`  • ${i}`));
     log(`final.mp4 ✔ → ${out}`);
@@ -385,7 +441,7 @@ const STEPS = {
 function reelProps(job, edl) {
   const assets = fs.existsSync(f(job, 'assets.json')) ? JSON.parse(fs.readFileSync(f(job, 'assets.json'), 'utf8')) : undefined;
   const screens = {};
-  for (const s of edl.scenes.filter((x) => x.kind === 'Screen')) {
+  for (const s of edl.scenes.filter((x) => x.kind === 'Screen' || (x.kind === 'Hook' && x.props?.shot && fs.existsSync(f(job, 'screens', `${x.props.shot}.png`))))) {
     const file = `screens/${s.props.shot}.png`;
     const [w, h] = pngSize(f(job, file));
     screens[s.props.shot] = { file, w, h, focus: SCREENS[s.props.shot]?.focus };

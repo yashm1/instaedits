@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Reel · Instaedits</title>
+<link rel="stylesheet" href="/app.css">
+</head><body>
+<header>
+  <a class="back" href="/">← All reels</a>
+  <span class="brand">Instaedits</span>
+  <span class="sp"></span>
+  <a href="https://github.com/yashm1/instaedits" target="_blank" rel="noopener">Source</a>
+</header>
+<main class="runpage" id="view"><p class="help">Loading…</p></main>
+<div class="toast" id="toast"></div>
+<script>
+const $=id=>document.getElementById(id);let es,tick,last=null,busy=false,player=null;const openLogs=new Set();
+const id=new URLSearchParams(location.search).get('id')||'';
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const base=p=>String(p||'').split('/').pop();
+const dur=s=>s<60?`${s.toFixed(s<10?1:0)}s`:`${Math.floor(s/60)}m ${String(Math.round(s%60)).padStart(2,'0')}s`;
+const toast=m=>{const t=$('toast');t.textContent=m;t.classList.add('on');clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove('on'),2200)};
+async function post(u,b){const r=await fetch(u,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b||{})});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||`${r.status} ${r.statusText}`);return d}
+
+function stepRow(s,i){const cached=s.log.some(l=>l.startsWith('♻'));const d=s.startedAt?((s.endedAt||Date.now())-s.startedAt)/1000:null;
+  const mark={done:'✓',error:'✕',skipped:'–',running:'·'}[s.status]||'';
+  const detail=s.error||(s.status==='running'&&s.log.length?s.log[s.log.length-1]:s.model);
+  return `<div class="step ${esc(s.status)}" data-k="${esc(s.key)}"><div class="head">
+    <span class="i num">${String(i+1).padStart(2,'0')}</span><span class="s">${mark}</span>
+    <div class="t"><b>${esc(s.title)}</b><span>${esc(String(detail).replace(/^♻️?\s*/,''))}</span></div>
+    <div class="r">${cached?'<span class="cached">reused</span>':''}${s.cost?`<span class="num">$${s.cost.toFixed(3)}</span>`:''}${d!=null?`<span class="num">${dur(d)}</span>`:''}${(s.status==='done'||s.status==='error')&&!busy?`<button class="btn link rerun" type="button" data-from="${esc(s.key)}">re-run</button>`:''}</div>
+  </div>${openLogs.has(s.key)&&s.log.length?`<pre>${esc(s.log.join('\n'))}</pre>`:''}</div>`}
+
+function render(j){last=j;busy=j.status==='running'||j.status==='queued';document.title=`${base(j.video)||j.id} · Instaedits`;
+  const starts=j.steps.filter(s=>s.startedAt).map(s=>s.startedAt);const t0=starts.length?Math.min(...starts):null;const t1=Math.max(0,...j.steps.map(s=>s.endedAt||0));
+  const cost=j.steps.reduce((a,s)=>a+s.cost,0);const reused=j.steps.filter(s=>s.log.some(l=>l.startsWith('♻'))).length;const ran=j.steps.filter(s=>s.status!=='pending').length;
+  const label={running:['run','Working'],queued:['warn','Queued'],done:['ok','Finished'],error:['err','Stopped — see the step marked ✕'],cancelled:['','Cancelled']}[j.status]||['',j.status];
+  let steps='';for(let i=0;i<j.steps.length;){const g=j.steps[i].group;
+    if(g){let k=i;while(k<j.steps.length&&j.steps[k].group===g)k++;steps+=`<div class="group-label">Steps ${i+1}–${k} run at the same time</div><div class="group">${j.steps.slice(i,k).map((s,x)=>stepRow(s,i+x)).join('')}</div>`;i=k}
+    else{steps+=stepRow(j.steps[i],i);i++}}
+  const qa=j.qa,rv=j.review;
+  const checks=qa?[
+    [qa.colourDrift==null?null:qa.colourDrift<=2.5,'Colour matches your original',qa.colourDrift==null?'':`${qa.colourDrift} levels`],
+    [qa.cards?qa.cards.split('/')[0]===qa.cards.split('/')[1]:null,'Every card on screen at its time',qa.cards||''],
+    ...(qa.problems||[]).map(p=>[false,p,'']),
+  ].filter(c=>c[0]!==null):[];
+  const verdict=!qa?(busy?'<p class="verdict"><span class="mark run"></span>Working on it</p>':''):!qa.ok?`<p class="verdict"><span class="mark err"></span>Problems found</p>`:rv&&rv.verdict==='fix'?`<p class="verdict"><span class="mark warn"></span>Ready, with reviewer notes</p>`:`<p class="verdict"><span class="mark ok"></span>Ready to post</p>`;
+  // keep the <video> element across re-renders so playback is not interrupted by live updates
+  const src=j.output?`/api/video/${encodeURIComponent(j.id)}?v=${t1}`:null;
+  if(src&&(!player||player.dataset.src!==src)){player=document.createElement('video');player.controls=true;player.playsInline=true;player.preload='metadata';player.src=src;player.dataset.src=src}
+  if(!src)player=null;
+  $('view').innerHTML=`
+   <div class="title"><h1>${esc(base(j.video)||j.id)}</h1></div>
+   <div class="meta"><span><span class="mark ${label[0]}"></span> ${esc(label[1])}</span><span class="num" id="elapsed">${t0?dur(((busy?Date.now():t1)-t0)/1000):'–'}</span><span class="num">$${cost.toFixed(2)}</span>${reused?`<span>${reused} of ${ran} steps reused</span>`:''}${j.tight?`<span>${j.tight.saved}s of pauses cut</span>`:''}</div>
+   ${j.direction?`<p class="concept">${esc(j.direction.concept)}</p>`:''}
+   <div class="result"><div id="slot">${src?'':`<div class="placeholder">${busy?'The reel appears here when it is ready.':'No finished reel for this run.'}</div>`}</div><div>
+      ${verdict}${checks.length?`<ul class="checks">${checks.map(c=>`<li class="${c[0]?'pass':'fail'}"><span>${c[0]?'✓':'✕'}</span><span>${esc(c[1])}</span><span class="v num">${esc(c[2])}</span></li>`).join('')}</ul>`:''}
+      ${rv&&rv.issues&&rv.issues.length?`<p class="notes-h">Reviewer notes <span class="help" style="font-weight:400">(${rv.issues.length})</span></p><ul class="notes">${rv.issues.slice(0,3).map(n=>`<li>${esc(n)}</li>`).join('')}</ul>${rv.issues.length>3?`<details class="more"><summary>Show all ${rv.issues.length}</summary><ul class="notes">${rv.issues.slice(3).map(n=>`<li>${esc(n)}</li>`).join('')}</ul></details>`:''}`:''}
+      ${j.output?`<img class="sheet" alt="One frame per card" src="/api/contact/${encodeURIComponent(j.id)}?v=${t1}" onerror="this.remove()">
+      <div class="actions"><button class="btn" id="reveal" type="button">Show in Finder</button><a class="btn" href="/api/video/${encodeURIComponent(j.id)}" download="${esc(base(j.video).replace(/\.[^.]+$/,''))}-edited.mp4">Download</a></div>`:''}
+   </div></div>
+   <div class="steps"><h2>Steps</h2>${steps}</div>`;
+  if(player)$('slot').appendChild(player);
+  const rev=$('reveal');if(rev)rev.onclick=()=>post('/api/reveal/'+encodeURIComponent(j.id)).catch(e=>toast(e.message));
+  $('view').querySelectorAll('.step .head').forEach(h=>h.onclick=e=>{if(e.target.closest('.rerun'))return;const k=h.parentElement.dataset.k;openLogs.has(k)?openLogs.delete(k):openLogs.add(k);render(last)});
+  $('view').querySelectorAll('.rerun').forEach(b=>b.onclick=async()=>{try{await post('/api/resume/'+encodeURIComponent(j.id),{from:b.dataset.from});connect();toast(`Re-running from “${b.dataset.from}”`)}catch(e){toast(e.message)}});
+  $('view').querySelectorAll('pre').forEach(p=>p.scrollTop=p.scrollHeight);
+  clearInterval(tick);if(busy&&t0)tick=setInterval(()=>{const e=$('elapsed');if(e)e.textContent=dur((Date.now()-t0)/1000)},1000);
+}
+function connect(){es?.close();es=new EventSource('/api/events/'+encodeURIComponent(id));es.onmessage=e=>render(JSON.parse(e.data));
+  es.onerror=()=>{if(!last)$('view').innerHTML='<p class="help">This run could not be loaded. <a class="back" href="/">Back to all reels</a></p>'}}
+if(!id)location.href='/';else connect();
+</script></body></html>

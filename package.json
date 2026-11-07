@@ -6,7 +6,7 @@
   "description": "AI video editing pipeline for Instagram Reels: script + talking-head video in, edited Reel out \u2014 Remotion infographics, captions, music and SFX. Claude plans, Remotion renders, the Edits app assembles.",
   "scripts": {
     "start": "node server/index.mjs",
-    "test": "node --test \"test/*.test.mjs\"",
+    "test": "node --import ./test/setup.mjs --test \"test/*.test.mjs\"",
     "setup": "cd remotion && npm install",
     "screens": "node server/screens-cli.mjs"
   },

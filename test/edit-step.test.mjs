@@ -46,12 +46,12 @@ const EDL = {
   music: { query: 'minimal tech', fallbacks: ['lofi focus'], volume: 0.12, duckedVolume: 0.072, fadeIn: 0.6, fadeOut: 1.2 },
 };
 const WORDS = [[0.1, 0.4], [0.45, 0.8], [0.85, 1.2], [1.25, 1.7], [1.75, 2.3], [2.4, 2.9], [2.95, 3.4]].map(([start, end]) => ({ start, end }));
-const opts = (fake, extra = {}) => ({ video: '/stage/reel.mp4', edl: EDL, out: '/stage/final.mp4', words: WORDS, tool: fake.tool, sleep: async () => {}, ...extra });
+const opts = (fake, extra = {}) => ({ video: '/stage/reel.mp4', edl: EDL, out: '/stage/final.mp4', tool: fake.tool, sleep: async () => {}, ...extra });
 const names = (calls) => calls.map((c) => c.name);
 
 test('the edit is plain tool calls: no colour grade is EVER applied (the black-and-white bug)', async () => {
   const fake = fakeEdits();
-  await runEdit(opts(fake, { transliterate: async (l) => l.map((x) => x.map(() => 'w')) }));
+  await runEdit(opts(fake));
   for (const banned of ['setColorGrade', 'applyAdjust', 'applyFilter', 'applyLUT', 'setHSL', 'setCurve', 'setColorWheel', 'addTransition'])
     assert.ok(!names(fake.calls).includes(banned), `${banned} must never be called`);
   assert.ok(names(fake.calls).includes('getAdjustState'), 'it verifies the clip has no adjustments');
@@ -62,63 +62,15 @@ test('imports the speaker clip, never re-times it, and exports (for its audio) t
   const { report } = await runEdit(opts(fake));
   const n = names(fake.calls);
   assert.deepEqual(n.slice(0, 4), ['newProject', 'setAspectRatio', 'setFrameRate', 'importMedia']);
+  for (const banned of ['generateCaptions', 'captions', 'splitCaption', 'editCaption', 'setCaptionStyle', 'setTextPosition']) assert.ok(!n.includes(banned), `${banned}: captions come from the transcript now (no round trips)`);
   assert.equal(fake.calls[2].args.fps, 30, 'the camera\'s frame rate (the app defaulted to a 60 fps export)');
   assert.equal(fake.calls[3].args.path, '/stage/reel.mp4');
   for (const banned of ['trim', 'trimClip', 'split', 'splitClip', 'move', 'setSpeed', 'delete']) assert.ok(!n.includes(banned), banned);
   const es = fake.calls.find((c) => c.name === 'setExportSettings').args;
-  assert.equal(es.resolution, '1080x1920'); assert.equal(es.bitrate, 20_000_000); assert.equal(es.frameRate, 30);
+  assert.deepEqual(es, { quality: 'High', frameRate: 30, resolution: '720x1280', resolutionType: '720p', aspectRatio: 'nineBySixteen', dynamicRange: 'SDR', bitrate: 2_000_000 }, 'only the audio is used: a small, fast, COMPLETE preset');
   assert.equal(fake.calls.find((c) => c.name === 'export').args.path, '/stage/final.mp4');
   assert.ok(n.indexOf('export') < n.lastIndexOf('exportStatus'), 'waits for the export to finish');
   assert.ok(report.some((r) => /exported/.test(r)));
-});
-
-test('captions: generated from the video in the spoken language, split into ≤3-word lines at real word gaps', async () => {
-  const fake = fakeEdits();
-  await runEdit(opts(fake));
-  const g = fake.calls.find((c) => c.name === 'generateCaptions').args;
-  assert.deepEqual(g, { source: 'video', language: 'hi', curseWords: false });
-  const splits = fake.calls.filter((c) => c.name === 'splitCaption');
-  assert.equal(splits.length, 1, 'the 5-word caption becomes 3+2; the 2-word one is left alone');
-  assert.equal(splits[0].args.time, +((WORDS[2].end + WORDS[3].start) / 2).toFixed(3), 'split in the silence between words 3 and 4');
-  assert.ok(fake.caps().every((c) => c.tokens.length <= 3));
-});
-
-test('captions become Latin-script Hinglish: LLM words when the count matches, rule-based fallback otherwise', async () => {
-  const fake = fakeEdits(); let seen;
-  const { report } = await runEdit(opts(fake, { transliterate: async (lines) => { seen = lines; return [['O', 'bhai,', 'ye'], ['pura'], ['Claude', 'ne']]; } }));
-  assert.deepEqual(seen, [['ओ', 'भाई,', 'ये'], ['पूरा', 'वीडियो'], ['Claude', 'ने']], 'one line per caption, original tokens');
-  const texts = fake.caps().map((c) => c.tokens.map((t) => t.text).join(' '));
-  assert.deepEqual(texts, ['O bhai, ye', 'poora veediyo', 'Claude ne'], 'line 2 had the wrong word count → deterministic fallback');
-  assert.ok(fake.caps().every((c) => c.tokens.every((t) => !/\p{Script=Devanagari}/u.test(t.text))), 'no Devanagari survives');
-  assert.ok(report.some((r) => /Hinglish \(1 line\(s\) via the rule-based fallback\)/.test(r)));
-});
-
-test('captions still become Latin when the transliteration call fails outright', async () => {
-  const fake = fakeEdits();
-  const { report } = await runEdit(opts(fake, { transliterate: async () => { throw new Error('budget exceeded'); } }));
-  assert.ok(fake.caps().every((c) => c.tokens.every((t) => !/\p{Script=Devanagari}/u.test(t.text))));
-  assert.ok(report.some((r) => /Hinglish transliteration: budget exceeded/.test(r)));
-});
-
-test('English captions are left as spoken (no transliteration call)', async () => {
-  const fake = fakeEdits({ captions: [{ id: 'c1', startTime: 0.1, endTime: 1, tokens: ['Hello', 'there'] }] }); let called = false;
-  await runEdit(opts(fake, { edl: { ...EDL, language: 'en' }, transliterate: async () => { called = true; return []; } }));
-  assert.equal(called, false);
-  assert.ok(!names(fake.calls).includes('editCaption'));
-});
-
-test('Edits never styles or positions captions (its picture is discarded); it RETURNS the Latin lines + timing', async () => {
-  const fake = fakeEdits();
-  const { captions } = await runEdit(opts(fake, { transliterate: async (l) => l.map((x) => x.map((w) => (w === 'Claude' ? 'Claude' : 'w'))) }));
-  for (const banned of ['setCaptionStyle', 'setTextPosition', 'setCaptionHighlightColor']) assert.ok(!names(fake.calls).includes(banned), banned);
-  assert.deepEqual(captions.map((c) => [c.startTime, c.words.length]), [[0.1, 3], [fake.caps()[1].startTime, 2], [2.4, 2]]);
-  assert.ok(captions.every((c) => c.words.every((w) => !/\p{Script=Devanagari}/u.test(w))));
-});
-
-test('caption generation is retried on a transient (cloud) error', async () => {
-  const fake = fakeEdits({ failOnce: { generateCaptions: 'uploadFailed: Network is unreachable' } });
-  await runEdit(opts(fake));
-  assert.equal(fake.calls.filter((c) => c.name === 'generateCaptions').length, 2);
 });
 
 test('music: exact volume, fades and ducking; SFX: seek to the exact second, then set the exact volume', async () => {
@@ -158,4 +110,11 @@ test('verify looks for the export in the staging folder, and fails loudly when i
   try {
     await assert.rejects(() => pipe.STEPS_FOR_TEST().verify(j, {}, () => {}), (e) => e.message.includes(path.join(stage, j.id, 'final.mp4')) && /did not land/.test(e.message));
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+});
+
+test('a lagging playhead is retried before an SFX is given up', async () => {
+  const fake = fakeEdits(); const orig = fake.tool; let n = 0;
+  const { report } = await runEdit(opts(fake, { tool: async (name, a) => (name === 'seek' && a.seconds === 5 && n++ < 2 ? Promise.reject(new Error('seek: playhead did not reach 5s')) : orig(name, a)) }));
+  assert.equal(fake.calls.filter((c) => c.name === 'addSoundEffect').length, 2, 'both SFX placed');
+  assert.ok(!report.some((r) => /sfx/.test(r)));
 });

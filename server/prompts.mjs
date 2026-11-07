@@ -11,7 +11,7 @@ LAYOUT (fixed): while a card is on screen the frame is SPLIT — the card fills 
 RETENTION DOCTRINE (numbers are limits)
 - NOVELTY: every card shows something the speaker is NOT showing by talking — the real product/screen, a diagram of the mechanism, a number, a contrast. A card that merely restates the sentence is slop.
 - SYNC: a card appears the moment its subject is SAID. Set 'word' to the spoken word (copied verbatim from the sentence, before "||") that names it, so it lands on that word, not at the sentence start.
-- Hook: first card at the first sentence, ≤4 words, curiosity gap or bold claim (not a copy of the script), works with sound OFF.
+- HOOK = THE STRONGEST FRAME OF THE VIDEO. The opening Hook is frame 0 and the thumbnail: it alone decides whether a scroller stops. Silently draft three candidates (a bold claim, a curiosity gap, the payoff/result) and use the one nobody could scroll past. ≤4 words, concrete beats vague (a name, a number, "Claude edited this" > "AI is amazing"), never a copy of the first sentence, works with sound OFF. Put the single most striking word in 'hot'. If a REAL SCREENSHOT proves the claim, set 'shot' on the hook to show it behind the words. Place it at sentence #1.
 - Rhythm: cards 2-5s; total card time 50-70% of the video; ≥1s of full-frame speaker between most cards; never >5s of plain speaker without a reason. Mid-video (50-60%) one card that re-opens attention.
 - Progress cues: 'tag' on every card of a multi-step explanation ("STEP 2/3", "SETUP", "RESULT").
 - LANGUAGE: all card text is ENGLISH (use the EN lines). Captions are handled separately.

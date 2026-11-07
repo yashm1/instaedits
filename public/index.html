@@ -1,84 +1,85 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Instaedits</title>
-<style>
-:root{--bg:#0d1117;--card:#161b22;--line:#30363d;--text:#e6edf3;--dim:#8b949e;--ok:#3fb950;--run:#58a6ff;--err:#f85149;--acc:#4de3c1}
-@media (prefers-color-scheme:light){:root{--bg:#f6f8fa;--card:#fff;--line:#d0d7de;--text:#1f2328;--dim:#59636e;--acc:#0a8f74}}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,system-ui,sans-serif}
-main{max-width:1100px;margin:0 auto;padding:24px 16px;display:grid;gap:20px;grid-template-columns:minmax(0,380px) minmax(0,1fr)}
-@media(max-width:860px){main{grid-template-columns:1fr}}
-h1{font-size:20px;margin:0 0 4px}.sub{color:var(--dim);margin-bottom:16px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px}
-label{display:block;font-weight:600;margin:12px 0 4px}label:first-child{margin-top:0}
-textarea,input,select{width:100%;background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:8px;font:inherit}
-textarea{min-height:200px;resize:vertical}
-button{background:var(--acc);color:#04201a;border:0;border-radius:6px;padding:9px 14px;font-weight:700;cursor:pointer}
-button.ghost{background:transparent;color:var(--text);border:1px solid var(--line);font-weight:500;padding:4px 10px}
-.row{display:flex;gap:8px;align-items:center}.hint{color:var(--dim);font-size:12px;margin-top:4px}
-.step{border:1px solid var(--line);border-radius:8px;margin-bottom:10px;overflow:hidden}
-.sh{display:flex;gap:10px;align-items:center;padding:10px 12px}
-.dot{width:12px;height:12px;border-radius:50%;background:var(--line);flex:none}
-.running .dot{background:var(--run);animation:p 1s infinite}.done .dot{background:var(--ok)}.skipped{opacity:.5}.error .dot{background:var(--err)}
-@keyframes p{50%{opacity:.3}}
-.t{font-weight:600}.m{color:var(--dim);font-size:12px}.sp{flex:1}
-.pill{font-size:12px;color:var(--dim);white-space:nowrap}
-pre{margin:0;padding:10px 12px;background:var(--bg);border-top:1px solid var(--line);max-height:180px;overflow:auto;font:12px/1.5 ui-monospace,monospace;white-space:pre-wrap}
-.bar{display:flex;justify-content:space-between;margin-bottom:12px;align-items:center}
-.total{color:var(--acc);font-weight:700}
-.err{color:var(--err)}
-</style></head><body><main>
-<section class="card">
-  <h1>Instaedits</h1><div class="sub">Talking-head video → split-screen Remotion infographics + real screenshots → Hinglish captions, music, SFX in Edits</div>
-  <label>Script <span class="m">(optional)</span></label><textarea id="script" placeholder="Optional. Paste your script, or just key terms (Kafka, Cassandra, 99.99%…). Leave empty to transcribe the audio. Tip: for Hindi/Hinglish, English words are often dropped by transcription — key terms here fix that."></textarea>
-  <label>Spoken language</label>
-  <select id="lang"><option value="auto">Auto-detect (recommended)</option><option value="en">English</option><option value="hi">Hindi (हिन्दी) — transcribed, translated to English, graphics in English</option></select>
-  <label>Video file location</label><input id="video" placeholder="/Users/you/Movies/reel.mp4">
-  <div class="hint">Absolute path. Tip: drag the file into Terminal to copy its path.</div>
-  <label>Links <span class="m">(optional)</span></label><input id="links" placeholder="https://github.com/you/repo — what “this repo / this tool” means">
-  <div class="hint">Shown as a real screenshot when you talk about it. Comma-separated https URLs or owner/name.</div>
-  <label>Terms <span class="m">(optional)</span></label><input id="terms" placeholder="Remotion, Claude Code, Kafka…">
-  <div class="hint">Names to spell right in captions and graphics (speech recognition mishears them). Empty = sensible defaults.</div>
-  <label>Quality check</label>
-  <select id="quality"><option value="high">Full — objective checks + an AI watches the export before “done”</option><option value="fast">Fast — objective checks only</option></select>
-  <label style="font-weight:400"><input type="checkbox" id="dry" style="width:auto"> Dry run (plan + Remotion render only, skip Edits app)</label>
-  <div class="row" style="margin-top:16px"><button id="run">Run workflow</button><span id="msg" class="err"></span></div>
-  <label>Recent jobs</label><div id="jobs"></div>
+<link rel="stylesheet" href="/app.css">
+</head><body>
+<header>
+  <span class="brand">Instaedits</span>
+  <span class="health" id="health"><span class="mark"></span><span>Checking the Edits app…</span></span>
+  <span class="sp"></span>
+  <a href="https://github.com/yashm1/instaedits" target="_blank" rel="noopener">Source</a>
+</header>
+<div class="layout">
+<aside>
+  <div class="field">
+    <label for="video">Video</label>
+    <div class="picker"><input class="text path" id="video" placeholder="/Users/you/Movies/reel.mp4" spellcheck="false"><button class="btn" id="browse" type="button">Browse…</button></div>
+    <div class="picked" id="picked"></div>
+    <div class="recent" id="recent"></div>
+  </div>
+  <div class="field">
+    <label>Spoken language</label>
+    <div class="segmented" id="lang"><button type="button" data-v="auto" class="on">Detect</button><button type="button" data-v="en">English</button><button type="button" data-v="hi">Hindi</button></div>
+  </div>
+  <div class="field">
+    <label for="links">Links mentioned in the video</label>
+    <input class="text" id="links" placeholder="yashm1/instaedits" spellcheck="false">
+    <div class="help">When you say “this repo” or “this tool”, its page is shown as a real screenshot.</div>
+  </div>
+  <div class="field">
+    <label for="terms">Names to spell correctly</label>
+    <input class="text" id="terms" placeholder="Remotion, Claude Code" spellcheck="false">
+    <div class="help">Used in the translation and captions. Empty uses the defaults.</div>
+  </div>
+  <details><summary>More options</summary><div class="inner">
+    <label for="script" style="font-size:12.5px;font-weight:600">Script (optional)</label>
+    <textarea class="text" id="script" style="margin-top:8px" placeholder="Leave empty to work from the audio."></textarea>
+    <label class="check"><input type="checkbox" id="review" checked><span>Review before finishing<small>A model checks each card against what you say.</small></span></label>
+    <label class="check"><input type="checkbox" id="dry"><span>Dry run<small>Plan and render without opening Edits.</small></span></label>
+  </div></details>
+  <button class="btn primary" id="run" type="button">Create reel</button>
+  <div class="error" id="msg"></div>
+</aside>
+<section class="work">
+  <div class="reels-h"><h1>Your reels</h1><span id="count"></span></div>
+  <div class="grid" id="grid"></div>
+  <div class="blank" id="blank" hidden><h1>No reels yet</h1>
+    <div>Choose a talking-head video on the left. Instaedits will:</div>
+    <ol><li>transcribe and translate it, and cut the pauses</li><li>plan graphics on the words you say, with real screenshots</li><li>add Hinglish captions, music and sound effects</li><li>check the result against your original before finishing</li></ol>
+  </div>
 </section>
-<section>
-  <div class="bar"><div><b id="jid">No job yet</b> <span class="m" id="jstat"></span></div><div class="total" id="total"></div></div>
-  <div id="dir"></div>
-  <div id="script_en"></div>
-  <div id="report"></div>
-  <div id="steps"></div>
-</section></main>
+</div>
 <script>
-const $=id=>document.getElementById(id);let es,cur;
-const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-const dur=s=>s.startedAt?((s.endedAt||Date.now())-s.startedAt)/1000|0:0;
-function render(j){
-  cur=j.id;$('jid').textContent=j.id;$('jstat').textContent='· '+j.status;
-  $('total').textContent=j.steps.some(s=>s.cost)?'$'+j.steps.reduce((a,s)=>a+s.cost,0).toFixed(3):'';
-  $('dir').innerHTML=j.direction?`<div class="card" style="margin-bottom:12px"><b>🎬 Direction</b> <span class="m">${esc(j.direction.concept)}</span>
-   <div class="m" style="margin-top:6px">Music: ${esc(j.direction.music)} · ${j.direction.cards} cards · ${j.direction.zooms} punch-ins · ${j.direction.sfx} SFX${j.tight?` · dead air cut: ${j.tight.saved}s`:''}</div>
-   ${j.references&&j.references.length?`<div class="m" style="margin-top:6px">🔗 Real visuals: ${j.references.map(r=>r.ok?`✅ ${esc(r.ref)}${r.detail?' ('+esc(r.detail)+')':''}`:`❌ ${esc(r.ref||r.kind)} — ${esc(r.reason||'failed')}`).join(' · ')}</div>`:''}
-   ${j.edl?`<div class="m" style="margin-top:6px">Timeline: ${j.edl.cards.map(esc).join(' · ')}</div>`:''}</div>`:'';
-  $('script_en').innerHTML=j.scriptEn?`<details class="card" style="margin-bottom:12px"><summary><b>🌐 English script</b> <span class="m">from the audio (${esc(j.language)})</span></summary><div class="m" style="margin-top:8px;white-space:pre-wrap">${esc(j.scriptEn)}</div></details>`:'';
-  $('report').innerHTML=(j.qa||j.editorReport)?`<details class="card" style="margin-bottom:12px" open><summary><b>✅ Quality check</b> <span class="m">${j.qa?(j.qa.ok?'export matches the render':'problems found'):''}${j.review?' · review: '+esc(j.review.verdict):''}</span></summary>
-   <div class="m" style="margin-top:8px;white-space:pre-wrap">${j.qa&&!j.qa.ok?esc(j.qa.problems.join('\n'))+'\n':''}${j.review&&j.review.issues.length?'Reviewer:\n• '+j.review.issues.map(esc).join('\n• ')+'\n':''}${j.editorReport?'Edits:\n'+esc(j.editorReport):''}${j.output?'\n→ '+esc(j.output):''}</div></details>`:'';
-  $('steps').innerHTML=j.steps.map((s,i)=>`<div class="step ${s.status}"><div class="sh"><span class="dot"></span>
-   <div><div class="t">${i+1}. ${esc(s.title)}</div><div class="m">${esc(s.model)}</div></div><span class="sp"></span>
-   <span class="pill">${s.tokens.in||s.tokens.out?`${s.tokens.in}↑ ${s.tokens.out}↓ · $${s.cost.toFixed(3)} · `:''}${s.startedAt?dur(s)+'s':''}</span>
-   ${s.status==='error'||s.status==='done'&&j.status!=='running'?`<button class="ghost" onclick="resume('${s.key}')">Re-run from here</button>`:''}</div>
-   ${s.log.length?`<pre>${esc(s.log.join('\n'))}</pre>`:''}</div>`).join('');
-  document.querySelectorAll('pre').forEach(p=>p.scrollTop=p.scrollHeight);
-}
-function watch(id){es?.close();es=new EventSource('/api/events/'+id);es.onmessage=e=>render(JSON.parse(e.data));}
-async function post(u,b){const r=await fetch(u,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b||{})});const d=await r.json();if(!r.ok)throw new Error(d.error);return d}
-$('run').onclick=async()=>{$('msg').textContent='';try{
-  const b={script:$('script').value,video:$('video').value,quality:$('quality').value,dryRun:$('dry').checked,language:$('lang').value,links:$('links').value,terms:$('terms').value};
-  const {id}=await post('/api/run',b);watch(id);loadJobs();}catch(e){$('msg').textContent=e.message}};
-window.resume=async from=>{await post('/api/resume/'+cur,{from});watch(cur)};
-async function loadJobs(){const js=await (await fetch('/api/jobs')).json();
-  $('jobs').innerHTML=js.slice(0,6).map(j=>`<div class="row" style="margin:4px 0"><a href="#" onclick="watch('${j.id}');return false" style="color:var(--acc)">${j.id}</a><span class="m">${j.status}</span></div>`).join('')||'<div class="m">none</div>'}
-loadJobs();if(location.hash.length>1)watch(decodeURIComponent(location.hash.slice(1)));setInterval(()=>{if(cur&&es)document.querySelectorAll('.running .pill').length&&0},1000);
+const $=id=>document.getElementById(id);let lang='auto';
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const base=p=>String(p||'').split('/').pop();
+async function post(u,b){const r=await fetch(u,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b||{})});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||`${r.status} ${r.statusText}`);return d}
+
+async function health(){const el=$('health');try{const r=await fetch('/api/health');if(!r.ok)throw new Error();const h=await r.json();
+  const m={ok:['ok','Edits connected'],'no-token':['err','Edits token missing (.env.local)'],'bad-token':['err','Edits rejected the token'],down:['err','Edits is not running']}[h.edits]||['err','Edits status unknown'];
+  el.innerHTML=`<span class="mark ${m[0]}"></span><span>${m[1]}</span>`}catch{el.innerHTML='<span class="mark warn"></span><span>Server is out of date — restart it (npm start)</span>'}}
+health();setInterval(health,15000);
+
+function setVideo(p,info){$('video').value=p||'';$('picked').textContent=info||''}
+$('video').oninput=()=>$('picked').textContent='';
+$('browse').onclick=async()=>{const b=$('browse');b.disabled=true;b.textContent='Choose in the dialog…';$('msg').textContent='';
+  try{const r=await post('/api/pick');if(!r.cancelled)setVideo(r.path,[r.name,r.duration&&`${r.duration}s`,r.resolution].filter(Boolean).join(' · '))}
+  catch(e){$('msg').textContent=/404/.test(e.message)?'This server is out of date — stop it and run npm start again.':e.message}
+  finally{b.disabled=false;b.textContent='Browse…'}};
+$('lang').onclick=e=>{const b=e.target.closest('button');if(!b)return;lang=b.dataset.v;[...$('lang').children].forEach(x=>x.classList.toggle('on',x===b))};
+fetch('/api/recent-videos').then(r=>r.ok?r.json():[]).then(vs=>{if(!vs.length)return;
+  $('recent').innerHTML='<span>Recent:</span>'+vs.slice(0,4).map(v=>`<button type="button" title="${esc(v)}" data-v="${esc(v)}">${esc(base(v))}</button>`).join('');
+  $('recent').onclick=e=>{const b=e.target.closest('button');if(b)setVideo(b.dataset.v,'Used before — unchanged steps are reused')}}).catch(()=>{});
+$('run').onclick=async()=>{$('msg').textContent='';const v=$('video').value.trim();if(!v){$('msg').textContent='Choose a video first.';return}
+  const b=$('run');b.disabled=true;b.textContent='Starting…';
+  try{const {id}=await post('/api/run',{video:v,script:$('script').value,language:lang,links:$('links').value,terms:$('terms').value,quality:$('review').checked?'high':'fast',dryRun:$('dry').checked});location.href='/job.html?id='+encodeURIComponent(id)}
+  catch(e){$('msg').textContent=e.message;b.disabled=false;b.textContent='Create reel'}};
+
+async function loadReels(){try{const js=await (await fetch('/api/jobs')).json();
+  const mk={done:'ok',error:'err',running:'run',queued:'warn',cancelled:''};const label={done:'Finished',error:'Stopped',running:'Working…',queued:'Queued',cancelled:'Cancelled'};
+  $('blank').hidden=js.length>0;$('count').textContent=js.length?`${js.length}`:'';
+  $('grid').innerHTML=js.map(j=>`<a class="tile" href="/job.html?id=${encodeURIComponent(j.id)}">
+    <div class="poster">${j.output?`<img loading="lazy" alt="" src="/api/thumb/${encodeURIComponent(j.id)}" onerror="this.remove()">`:''}${j.output?'':(j.status==='running'||j.status==='queued'?'Working…':'No preview')}</div>
+    <div class="cap"><b>${esc(base(j.video)||j.id)}</b><div class="m"><span class="mark ${mk[j.status]||''}"></span>${esc(label[j.status]||j.status)} · ${new Date(j.createdAt).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}${j.totalSeconds?` · ${Math.round(j.totalSeconds)}s`:''}</div></div></a>`).join('')}catch{}}
+loadReels();setInterval(loadReels,6000);
 </script></body></html>

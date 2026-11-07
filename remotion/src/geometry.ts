@@ -31,7 +31,8 @@ export function splitAt(f: number, fps: number, wins: Win[]): number {
   for (const w of wins) {
     const a = Math.round(w.start * fps), b = Math.round(w.end * fps);
     if (f < a - 1 || f > b + EASE_F) continue;
-    const open = spring({frame: f - a, fps, config: {damping: 200}, durationInFrames: EASE_F});
+    // a card at frame 0 (the opening hook) is fully open on the very first frame — no empty first frame / thumbnail
+    const open = a === 0 ? 1 : spring({frame: f - a, fps, config: {damping: 200}, durationInFrames: EASE_F});
     const close = spring({frame: f - (b - EASE_F), fps, config: {damping: 200}, durationInFrames: EASE_F});
     split = Math.max(split, Math.min(open, 1 - close));
   }

@@ -102,3 +102,31 @@ export function captionLines(caps, words, windows) {
     return { start: +c.startTime.toFixed(3), end: +c.endTime.toFixed(3), y: captionY(c, windows), words: ws };
   }).filter((l) => l.words.length);
 }
+
+/**
+ * Caption lines straight from the transcript (exact word times — no caption round trips through the app): phrases break
+ * at sentence punctuation or a pause > `gap`, then into balanced lines of ≤ maxWords. A line stays up until the next one
+ * starts (≤ 0.6 s after its last word), so captions never flicker. Returns [{start, end, words:[{text, start, end}]}].
+ */
+export function linesFromWords(words, { maxWords = 3, gap = 0.35, hold = 0.6 } = {}) {
+  const phrases = []; let cur = [];
+  words.forEach((w, i) => {
+    cur.push(w);
+    const next = words[i + 1];
+    if (!next || /[.?!।,]$/.test(w.text) || next.start - w.end > gap) { phrases.push(cur); cur = []; }
+  });
+  const lines = [];
+  for (const p of phrases) {
+    const k = Math.ceil(p.length / maxWords), base = Math.floor(p.length / k), extra = p.length % k;
+    let i = 0;
+    for (let g = 0; g < k; g++) { const n = base + (g < extra ? 1 : 0); lines.push(p.slice(i, i + n)); i += n; }
+  }
+  return lines.map((ws, li) => {
+    const nextStart = lines[li + 1]?.[0].start ?? Infinity;
+    const end = Math.min(nextStart, ws.at(-1).end + hold);
+    return {
+      start: +ws[0].start.toFixed(3), end: +end.toFixed(3),
+      words: ws.map((w, j) => ({ text: w.text, start: +w.start.toFixed(3), end: +(j + 1 < ws.length ? ws[j + 1].start : end).toFixed(3) })),
+    };
+  });
+}

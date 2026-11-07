@@ -91,21 +91,45 @@ const Heading: React.FC<{text?: string}> = ({text}) => {
 };
 
 // ───────── scenes ─────────
-/** Hook / statement. `hot` words get the accent colour. */
-export const Hook: React.FC<{text: string; hot?: string[]; sub?: string; tag?: string}> = ({text, hot = [], sub, tag}) => {
+/** Hook / statement. `hot` words get the accent colour. `opening`: the FIRST FRAME of the reel — fully visible at frame 0,
+ * hot words on a solid accent block, optional real screenshot (`shot`) as a darkened backdrop. */
+export const Hook: React.FC<{text: string; hot?: string[]; sub?: string; tag?: string; opening?: boolean; shot?: string}> = ({text, hot = [], sub, tag, opening, shot}) => {
   const f = useCurrentFrame();
   const panel = usePanel();
   const words = text.split(' ');
+  const isHot = (w: string) => hot.some((h) => w.toLowerCase().replace(/[^a-z0-9]/g, '') === h.toLowerCase().replace(/[^a-z0-9]/g, ''));
+  const subP = useSpring(opening ? 0 : words.length * 4 + 4);
+  if (opening) {
+    const screens = (getInputProps() as {screens?: Record<string, {file: string}>}).screens ?? {};
+    const bg = shot ? screens[shot] : undefined;
+    const settle = interpolate(f, [0, 24], [1.06, 1], {...clamp, easing: Easing.out(Easing.cubic)}); // visible at frame 0, then settles
+    const bar = interpolate(f, [4, 22], [0, 1], {...clamp, easing: Easing.out(Easing.cubic)});
+    return (
+      <AbsoluteFill style={{background: theme.bg, fontFamily, color: theme.text, overflow: 'hidden'}}>
+        {bg ? <Img src={staticFile(bg.file)} style={{position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', filter: 'blur(6px) brightness(0.35) saturate(1.1)', transform: `scale(${1.15 + (settle - 1)})`}} /> : null}
+        <AbsoluteFill style={{background: `radial-gradient(900px 700px at 25% 40%, ${theme.glow}cc, transparent 70%), linear-gradient(180deg, transparent 55%, ${theme.bg}ee)`}} />
+        <AbsoluteFill style={{padding: panel ? '150px 64px 70px' : '360px 76px 620px', justifyContent: 'center', transform: `scale(${settle})`, transformOrigin: '30% 50%'}}>
+          {tag ? <div style={{fontSize: 30, letterSpacing: 7, color: theme.accent, fontWeight: 800, textTransform: 'uppercase', marginBottom: 22}}>{tag}</div> : null}
+          <div style={{fontSize: text.length > 22 ? 128 : 156, fontWeight: 800, lineHeight: 1.0, letterSpacing: -4, display: 'flex', flexWrap: 'wrap', gap: '6px 28px'}}>
+            {words.map((w, i) => isHot(w)
+              ? <span key={i} style={{background: theme.accent, color: '#04201a', padding: '0 18px', borderRadius: 18, boxShadow: `0 0 60px ${theme.accent}66`}}>{w}</span>
+              : <span key={i}>{w}</span>)}
+          </div>
+          <div style={{height: 10, width: `${bar * 46}%`, background: theme.accent, borderRadius: 5, marginTop: 30}} />
+          {sub ? <div style={{fontSize: 52, color: theme.dim, marginTop: 26, fontWeight: 700}}>{sub}</div> : null}
+        </AbsoluteFill>
+      </AbsoluteFill>
+    );
+  }
   return (
     <Stage tag={tag} align={panel ? 'center' : 'start'}>
       <div style={{fontSize: panel ? (text.length > 22 ? 120 : 144) : 124, fontWeight: 800, lineHeight: 1.02, letterSpacing: -3}}>
         {words.map((w, i) => {
           const p = spring({frame: f - i * 4, fps: 30, config: {damping: 14, stiffness: 190}});
-          const isHot = hot.some((h) => w.toLowerCase().replace(/[^a-z0-9]/g, '') === h.toLowerCase().replace(/[^a-z0-9]/g, ''));
-          return <span key={i} style={{display: 'inline-block', marginRight: 26, color: isHot ? theme.accent : theme.text, ...pop(p, 50)}}>{w}</span>;
+          return <span key={i} style={{display: 'inline-block', marginRight: 26, color: isHot(w) ? theme.accent : theme.text, ...pop(p, 50)}}>{w}</span>;
         })}
       </div>
-      {sub ? <div style={{fontSize: panel ? 54 : 50, color: theme.dim, marginTop: panel ? 30 : 40, ...pop(useSpring(words.length * 4 + 4))}}>{sub}</div> : null}
+      {sub ? <div style={{fontSize: panel ? 54 : 50, color: theme.dim, marginTop: panel ? 30 : 40, ...pop(subP)}}>{sub}</div> : null}
     </Stage>
   );
 };

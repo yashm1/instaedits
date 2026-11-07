@@ -1,24 +1,20 @@
 // The Edits app step, as plain tool calls — no LLM. Every value is exact and every step is checked.
-// Edits does what it is best at: the CAPTIONS (its speech model, split into short lines, Hinglish), licensed MUSIC, SFX
-// and voice polish. Its export is used for its AUDIO MIX and its caption TEXT/TIMING only — never for the picture:
-// Edits re-encodes video (HEVC only) with a small magenta shift, so the picture is composited by ffmpeg from the
-// original camera pixels (composite.mjs). History: an LLM executor once set saturation 0.04 (a MULTIPLIER) → B&W.
+// Edits does what only it can: licensed MUSIC, SFX and voice polish. Its export is used for the AUDIO MIX only — never
+// the picture (Edits re-encodes video, HEVC only, with a small magenta shift; the picture is composited by ffmpeg from
+// the original camera pixels). Captions come from the transcript (exact word times), not from caption round trips.
+// History: an LLM executor once set saturation 0.04 (a MULTIPLIER) → black and white.
 import fs from 'node:fs';
 import { tool as editsTool } from './edits-mcp.mjs';
-import { isTransient } from './media.mjs';
-import { lineSplits, latinLine, hasDevanagari } from './captions.mjs';
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-const capsOf = async (tool) => ((await tool('captions', {}))?.captions ?? []).slice().sort((a, b) => a.startTime - b.startTime);
 
 /**
  * @param o.video  staged tight.mp4 (the speaker, silence-tightened; same timeline as the final reel)
- * @param o.edl    { duration, language, sfx, music }
- * @param o.words  [{start,end}] spoken words on that timeline (for caption line breaks)
- * @param o.transliterate async (lines: string[][]) => string[][] | null — Latin Hinglish for non-English captions
- * @returns { report: string[], captions: [{startTime, endTime, words: string[]}] }  (+ the export at `out`, used for audio)
+ * @param o.edl    { duration, sfx, music }
+ * @param o.out    export path (staging folder); only its audio is used
+ * @returns { report: string[] }
  */
-export async function runEdit({ video, edl, out, words = [], transliterate = null, log = () => {}, tool = editsTool, sleep = wait, exportTimeoutMs = 15 * 60_000 }) {
+export async function runEdit({ video, edl, out, log = () => {}, tool = editsTool, sleep = wait, exportTimeoutMs = 15 * 60_000 }) {
   const report = [];
   const note = (m) => { report.push(m); log(m); };
   const soft = async (what, fn) => { try { return await fn(); } catch (e) { note(`⚠️ ${what}: ${String(e.message).replace(/\s+/g, ' ').slice(0, 140)}`); return null; } };
@@ -44,43 +40,6 @@ export async function runEdit({ video, edl, out, words = [], transliterate = nul
     log('voice enhance on');
   });
 
-  // 3. captions: generate (cloud — retry), short lines at real word gaps, Latin Hinglish
-  const lang = edl.language ?? 'en';
-  let caps = [];
-  for (let i = 1; i <= 4 && !caps.length; i++) {
-    try {
-      if (i > 1) { log(`captions: retry ${i}/4…`); await sleep(4000 * (i - 1)); }
-      await tool('generateCaptions', { source: 'video', language: lang, curseWords: false });
-      caps = await capsOf(tool);
-    } catch (e) { if (!isTransient(e.message) || i === 4) throw new Error(`captions failed: ${e.message.slice(0, 160)}`); }
-  }
-  if (!caps.length) throw new Error('Edits generated no captions (4 attempts)');
-  let splits = 0;
-  for (const c of [...caps]) {
-    const inside = words.filter((w) => w.start >= c.startTime - 0.05 && w.end <= c.endTime + 0.05);
-    for (const t of lineSplits(inside, 3)) {
-      const cur = (await capsOf(tool)).find((x) => x.startTime < t && x.endTime > t);
-      if (!cur) continue;
-      const r = await tool('splitCaption', { id: cur.id, time: t }).catch(() => null);
-      if (r?.ok) splits++;
-    }
-  }
-  caps = await capsOf(tool);
-  log(`captions: ${caps.length} lines (${splits} splits)`);
-  if (lang !== 'en' || caps.some((c) => c.tokens.some((t) => hasDevanagari(t.text)))) {
-    const lines = caps.map((c) => c.tokens.map((t) => t.text));
-    const llm = transliterate ? await soft('Hinglish transliteration', () => transliterate(lines)) : null;
-    let fallback = 0;
-    for (const [i, c] of caps.entries()) {
-      const latin = latinLine(lines[i], llm?.[i]);
-      if (!llm?.[i] || latin.join(' ') !== llm[i].map((w) => String(w).trim()).join(' ')) fallback++;
-      await tool('editCaption', { id: c.id, text: latin.join(' ') });
-    }
-    note(`captions in Latin-script Hinglish${fallback ? ` (${fallback} line(s) via the rule-based fallback)` : ''}`);
-  }
-  // the lines as the app now holds them (text + timing) → rendered by Remotion over the original footage
-  const captions = (await capsOf(tool)).map((c) => ({ startTime: c.startTime, endTime: c.endTime, words: c.tokens.map((t) => (hasDevanagari(t.text) ? latinLine([t.text], null)[0] : t.text)) }));
-
   // 4. music: one licensed instrumental bed under the voice
   const m = edl.music;
   if (m) {
@@ -104,7 +63,10 @@ export async function runEdit({ video, edl, out, words = [], transliterate = nul
   let placed = 0;
   for (const x of edl.sfx ?? []) {
     await soft(`sfx ${x.name} @${x.at}s`, async () => {
-      await tool('seek', { seconds: x.at });
+      // the playhead sometimes lags while the app is busy ("playhead did not reach …"): retry briefly before giving up
+      for (let i = 1; ; i++) {
+        try { await tool('seek', { seconds: x.at }); break; } catch (e) { if (i >= 4 || !/playhead/i.test(e.message)) throw e; await sleep(400 * i); }
+      }
       const r = await tool('addSoundEffect', { effect: x.name });
       if (r?.id) await tool('setVolume', { id: r.id, volume: x.volume });
       placed++;
@@ -112,9 +74,9 @@ export async function runEdit({ video, edl, out, words = [], transliterate = nul
   }
   if (edl.sfx?.length) log(`sfx: ${placed}/${edl.sfx.length} placed`);
 
-  // 6. export (HEVC is what the app offers; 1080x1920 30 fps, 20 Mbit/s — well above the app default) and wait for it
-  // a COMPLETE preset (verified values): a partial one makes export() fail with "incomplete preset row"
-  await tool('setExportSettings', { quality: 'high', frameRate: 30, resolution: '1080x1920', resolutionType: 'HD', aspectRatio: 'nineBySixteen', dynamicRange: 'SDR', bitrate: 20_000_000 });
+  // 6. export — only the AUDIO is used, so the picture is small and fast (720p, 2 Mbit/s). A COMPLETE preset (verified
+  //    values): a partial one makes export() fail with "incomplete preset row".
+  await tool('setExportSettings', { quality: 'High', frameRate: 30, resolution: '720x1280', resolutionType: '720p', aspectRatio: 'nineBySixteen', dynamicRange: 'SDR', bitrate: 2_000_000 });
   await tool('export', { path: out });
   const t0 = Date.now(); let st = null;
   while (Date.now() - t0 < exportTimeoutMs) {
@@ -128,5 +90,5 @@ export async function runEdit({ video, edl, out, words = [], transliterate = nul
   }
   if (Date.now() - t0 >= exportTimeoutMs) throw new Error('export timed out');
   note(`exported the audio mix → ${out}`);
-  return { report, captions };
+  return { report };
 }
