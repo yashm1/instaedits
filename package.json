@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node server/index.mjs",
     "test": "node --test \"test/*.test.mjs\"",
-    "setup": "cd remotion && npm install && cp -n src/Scenes.default.tsx src/Scenes.tsx"
+    "setup": "cd remotion && npm install",
+    "screens": "node server/screens-cli.mjs"
   },
   "engines": {
     "node": ">=22.18"

@@ -1,21 +1,20 @@
 import React from 'react';
 import {Composition} from 'remotion';
-import {scenes} from './Scenes';
+import {Reel, type ReelProps} from './Reel';
 import {canvas} from './lib/theme';
 
-// One composition per scene (id "s1", "s2", ...). Scenes.tsx is generated per job.
+// One composition: the finished picture. Props (video, scenes, zooms, assets, screens) come from the pipeline's reel.json.
+const sample: ReelProps = {video: 'tight.mp4', duration: 4, scenes: [{id: 's1', start: 0.1, dur: 3, kind: 'Hook', props: {text: 'Preview', hot: ['Preview']}}], zooms: []};
+
 export const Root: React.FC = () => (
-  <>
-    {scenes.map((s) => (
-      <Composition
-        key={s.id}
-        id={s.id}
-        component={s.Component}
-        durationInFrames={s.durationInFrames}
-        fps={canvas.fps}
-        width={canvas.width}
-        height={canvas.height}
-      />
-    ))}
-  </>
+  <Composition
+    id="reel"
+    component={Reel as unknown as React.FC<Record<string, unknown>>}
+    defaultProps={sample as unknown as Record<string, unknown>}
+    calculateMetadata={({props}) => ({durationInFrames: Math.max(1, Math.round(Number((props as unknown as ReelProps).duration) * canvas.fps))})}
+    durationInFrames={120}
+    fps={canvas.fps}
+    width={canvas.width}
+    height={canvas.height}
+  />
 );

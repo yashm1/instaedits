@@ -151,7 +151,8 @@ export function sentences(words, toOut, { maxWords = 14, maxSeconds = 6 } = {}) 
     }
     return k < 0 ? [c] : [...split(c.slice(0, k)), ...split(c.slice(k))];
   };
-  return chunks.flatMap(split).map((c, i) => ({ n: i + 1, t: toOut(c[0].start), text: c.map((w) => w.w).join(' ') }));
+  let k = 0; // word index of each sentence's first word (for 'word' anchors)
+  return chunks.flatMap(split).map((c, i) => { const i0 = k; k += c.length; return { n: i + 1, t: toOut(c[0].start), text: c.map((w) => w.w).join(' '), i0, i1: k - 1 }; });
 }
 
 const lcs = (a, b) => {
@@ -179,19 +180,39 @@ export function findAnchor(words, anchor, from = 0) {
   return bestScore >= Math.max(1, Math.ceil(a.length * 0.6)) ? best : -1;
 }
 
+const CARD_GAP = 0.1, MIN_CARD = 1.2;
+
+/** Index of `word` within words[i0..i1] (exact normalised match, else a ≥3-letter prefix match either way), or -1. */
+export function findWordIn(words, word, i0, i1) {
+  const target = norm(String(word ?? ''));
+  if (!target) return -1;
+  let prefix = -1;
+  for (let i = i0; i <= i1 && i < words.length; i++) {
+    const w = norm(words[i].w);
+    if (w === target) return i;
+    if (prefix < 0 && Math.min(w.length, target.length) >= 3 && (w.startsWith(target) || target.startsWith(w))) prefix = i;
+  }
+  return prefix;
+}
+
 /** Compile the director's anchors into absolute tight-timeline seconds → the Edit Decision List. */
 export function buildEdl(direction, words, cuts, log, sents = null, language = 'en') {
-  const bySentence = sents ? new Map(sents.map((x) => [x.n, x.t])) : null;
-  const at = (anchor, from) => {
+  const bySentence = sents ? new Map(sents.map((x) => [x.n, x])) : null;
+  const at = (anchor, from, word) => {
     const m = /^\s*#(\d+)\s*$/.exec(anchor ?? '');
-    if (m) return bySentence?.has(+m[1]) ? { i: -1, t: bySentence.get(+m[1]) } : null; // language-independent sentence anchor
+    if (m) { // language-independent sentence anchor, optionally refined to the exact spoken word inside that sentence
+      const sn = bySentence?.get(+m[1]);
+      if (!sn) return null;
+      const wi = word ? findWordIn(words, word, sn.i0, sn.i1) : -1;
+      return wi >= 0 ? { i: wi, t: cuts.toOut(words[wi].start), word: true } : { i: -1, t: sn.t };
+    }
     const i = findAnchor(words, anchor, from);
     return i < 0 ? null : { i, t: cuts.toOut(words[i].start) };
   };
   let prevEnd = 0;
   const scenes = [];
   for (const s of [...direction.scenes]) {
-    const hit = at(s.anchor, 0) ; // scenes are placed independently (the director may reorder)
+    const hit = at(s.anchor, 0, s.word); // scenes are placed independently (the director may reorder)
     if (!hit) { log(`⚠️ anchor not found, scene dropped: "${s.anchor}"`); continue; }
     scenes.push({ ...s, t: hit.t });
   }
@@ -199,11 +220,17 @@ export function buildEdl(direction, words, cuts, log, sents = null, language = '
   const edl = { duration: cuts.total, language, scenes: [], zooms: [], sfx: [] };
   scenes.forEach((s, idx) => {
     // opening Hook lands on the very first frames (silent-test: premise readable with sound off)
-    const start = idx === 0 && s.kind === 'Hook' && s.t < 1.5 ? 0.1 : Math.max(prevEnd + 0.45, s.t - 0.08);
-    const nextT = scenes[idx + 1]?.t ?? cuts.total;
-    const dur = Math.min(s.dur, nextT - 0.45 - start, cuts.total - start);
-    if (dur < 1.2) { log(`⚠️ no room for ${s.id} (${dur.toFixed(1)}s) — dropped`); return; }
-    edl.scenes.push({ id: `s${edl.scenes.length + 1}`, was: s.id, anchor: s.anchor, start: +start.toFixed(2), dur: +dur.toFixed(2), kind: s.kind, props: s.props, tin: s.transition_in, tout: s.transition_out });
+    // the split layout takes ~0.35 s to open: lead by 0.2 s so the card is readable as the word is said
+    // Split layout: consecutive cards hand off inside the open panel, so they only need a hair of space (CARD_GAP).
+    // A card that would be squeezed (e.g. a CTA named in the last second) starts EARLIER — never before the previous card ends.
+    const earliest = idx === 0 ? 0.1 : prevEnd + CARD_GAP;
+    let start = idx === 0 && s.kind === 'Hook' && s.t < 1.5 ? 0.1 : Math.max(earliest, s.t - 0.2);
+    const latestEnd = scenes[idx + 1] ? scenes[idx + 1].t - 0.2 - CARD_GAP : cuts.total;
+    const want = Math.min(s.dur, Math.max(MIN_CARD, 2));
+    if (latestEnd - start < want) start = Math.max(earliest, latestEnd - want);
+    const dur = Math.min(s.dur, latestEnd - start);
+    if (dur < MIN_CARD) { log(`⚠️ no room for ${s.id} (${dur.toFixed(1)}s) — dropped`); return; }
+    edl.scenes.push({ id: `s${edl.scenes.length + 1}`, was: s.id, anchor: s.anchor, ...(s.word ? { word: s.word } : {}), start: +start.toFixed(2), dur: +dur.toFixed(2), kind: s.kind, props: s.props });
     prevEnd = start + dur;
   });
   // Zooms live only in talking-head gaps between cards. Snap to the nearest gap that fits, else drop.
@@ -234,7 +261,7 @@ export function buildEdl(direction, words, cuts, log, sents = null, language = '
   // never stack sfx closer than 0.8s
   edl.sfx = edl.sfx.filter((s, i, a) => i === 0 || s.at - a[i - 1].at >= 0.8);
   edl.zooms.sort((a, b) => a.start - b.start);
-  edl.captions = direction.captions; edl.music = direction.music; edl.grade = direction.grade; edl.audio = direction.audio;
+  edl.captions = direction.captions; edl.music = direction.music;
   return edl;
 }
 

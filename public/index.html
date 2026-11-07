@@ -28,15 +28,18 @@ pre{margin:0;padding:10px 12px;background:var(--bg);border-top:1px solid var(--l
 .err{color:var(--err)}
 </style></head><body><main>
 <section class="card">
-  <h1>Instaedits</h1><div class="sub">Script + video → Remotion cards → edited reel</div>
+  <h1>Instaedits</h1><div class="sub">Talking-head video → split-screen Remotion infographics + real screenshots → Hinglish captions, music, SFX in Edits</div>
   <label>Script <span class="m">(optional)</span></label><textarea id="script" placeholder="Optional. Paste your script, or just key terms (Kafka, Cassandra, 99.99%…). Leave empty to transcribe the audio. Tip: for Hindi/Hinglish, English words are often dropped by transcription — key terms here fix that."></textarea>
   <label>Spoken language</label>
   <select id="lang"><option value="auto">Auto-detect (recommended)</option><option value="en">English</option><option value="hi">Hindi (हिन्दी) — transcribed, translated to English, graphics in English</option></select>
   <label>Video file location</label><input id="video" placeholder="/Users/you/Movies/reel.mp4">
   <div class="hint">Absolute path. Tip: drag the file into Terminal to copy its path.</div>
-  <label>Edit quality</label>
-  <select id="quality"><option value="high">High — Sonnet 5.5 + frame QA pass</option><option value="fast">Fast — Haiku 5.5, no QA pass</option></select>
-  <label>Edit step budget (USD cap)</label><input id="budget" type="number" step="0.1" placeholder="auto (3.0 high / 1.5 fast)">
+  <label>Links <span class="m">(optional)</span></label><input id="links" placeholder="https://github.com/you/repo — what “this repo / this tool” means">
+  <div class="hint">Shown as a real screenshot when you talk about it. Comma-separated https URLs or owner/name.</div>
+  <label>Terms <span class="m">(optional)</span></label><input id="terms" placeholder="Remotion, Claude Code, Kafka…">
+  <div class="hint">Names to spell right in captions and graphics (speech recognition mishears them). Empty = sensible defaults.</div>
+  <label>Quality check</label>
+  <select id="quality"><option value="high">Full — objective checks + an AI watches the export before “done”</option><option value="fast">Fast — objective checks only</option></select>
   <label style="font-weight:400"><input type="checkbox" id="dry" style="width:auto"> Dry run (plan + Remotion render only, skip Edits app)</label>
   <div class="row" style="margin-top:16px"><button id="run">Run workflow</button><span id="msg" class="err"></span></div>
   <label>Recent jobs</label><div id="jobs"></div>
@@ -60,7 +63,8 @@ function render(j){
    ${j.references&&j.references.length?`<div class="m" style="margin-top:6px">🔗 Real visuals: ${j.references.map(r=>r.ok?`✅ ${esc(r.ref)}${r.detail?' ('+esc(r.detail)+')':''}`:`❌ ${esc(r.ref||r.kind)} — ${esc(r.reason||'failed')}`).join(' · ')}</div>`:''}
    ${j.edl?`<div class="m" style="margin-top:6px">Timeline: ${j.edl.cards.map(esc).join(' · ')}</div>`:''}</div>`:'';
   $('script_en').innerHTML=j.scriptEn?`<details class="card" style="margin-bottom:12px"><summary><b>🌐 English script</b> <span class="m">from the audio (${esc(j.language)})</span></summary><div class="m" style="margin-top:8px;white-space:pre-wrap">${esc(j.scriptEn)}</div></details>`:'';
-  $('report').innerHTML=j.editorReport?`<details class="card" style="margin-bottom:12px" open><summary><b>📝 Editor's report</b> <span class="m">what the editing model did and any deviations</span></summary><div class="m" style="margin-top:8px;white-space:pre-wrap">${esc(j.editorReport)}</div></details>`:'';
+  $('report').innerHTML=(j.qa||j.editorReport)?`<details class="card" style="margin-bottom:12px" open><summary><b>✅ Quality check</b> <span class="m">${j.qa?(j.qa.ok?'export matches the render':'problems found'):''}${j.review?' · review: '+esc(j.review.verdict):''}</span></summary>
+   <div class="m" style="margin-top:8px;white-space:pre-wrap">${j.qa&&!j.qa.ok?esc(j.qa.problems.join('\n'))+'\n':''}${j.review&&j.review.issues.length?'Reviewer:\n• '+j.review.issues.map(esc).join('\n• ')+'\n':''}${j.editorReport?'Edits:\n'+esc(j.editorReport):''}${j.output?'\n→ '+esc(j.output):''}</div></details>`:'';
   $('steps').innerHTML=j.steps.map((s,i)=>`<div class="step ${s.status}"><div class="sh"><span class="dot"></span>
    <div><div class="t">${i+1}. ${esc(s.title)}</div><div class="m">${esc(s.model)}</div></div><span class="sp"></span>
    <span class="pill">${s.tokens.in||s.tokens.out?`${s.tokens.in}↑ ${s.tokens.out}↓ · $${s.cost.toFixed(3)} · `:''}${s.startedAt?dur(s)+'s':''}</span>
@@ -71,8 +75,7 @@ function render(j){
 function watch(id){es?.close();es=new EventSource('/api/events/'+id);es.onmessage=e=>render(JSON.parse(e.data));}
 async function post(u,b){const r=await fetch(u,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b||{})});const d=await r.json();if(!r.ok)throw new Error(d.error);return d}
 $('run').onclick=async()=>{$('msg').textContent='';try{
-  const b={script:$('script').value,video:$('video').value,quality:$('quality').value,dryRun:$('dry').checked,language:$('lang').value};
-  if($('budget').value)b.budgets={edit:+$('budget').value};
+  const b={script:$('script').value,video:$('video').value,quality:$('quality').value,dryRun:$('dry').checked,language:$('lang').value,links:$('links').value,terms:$('terms').value};
   const {id}=await post('/api/run',b);watch(id);loadJobs();}catch(e){$('msg').textContent=e.message}};
 window.resume=async from=>{await post('/api/resume/'+cur,{from});watch(cur)};
 async function loadJobs(){const js=await (await fetch('/api/jobs')).json();

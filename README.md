@@ -4,7 +4,7 @@
 
 ### Turn a script and a talking-head video into a finished, high-retention Reel.
 
-AI-directed short-form video editing: animated infographics, styled captions, music and sound effects — placed on the exact words you speak.
+AI-directed short-form video editing: split-screen Remotion infographics and real app screenshots above you, Hinglish captions, music and sound effects — placed on the exact words you speak.
 
 [![tests](https://github.com/yashm1/instaedits/actions/workflows/test.yml/badge.svg)](https://github.com/yashm1/instaedits/actions/workflows/test.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -25,9 +25,10 @@ AI-directed short-form video editing: animated infographics, styled captions, mu
 Most "AI video editors" cut your footage and sprinkle effects. Instaedits works like an editor-in-chief with a checklist:
 
 1. **One strong model decides everything creative, once** — what to show on which sentence, where to zoom, how loud the music is, which captions to emphasise.
-2. **Everything after that is mechanical** — local code resolves the decisions into exact timestamps, Remotion renders the cards, a cheaper model just executes the list inside your editor.
-3. **Where a rule can be checked, it is enforced in code** — a bad generation can't ship a 12-word hook or music louder than your voice.
-4. **It's cheap on purpose**: only 3–4 of the 11 steps use an LLM (translation runs only for non-English speech), each with a hard dollar cap.
+2. **Everything after that is mechanical** — local code resolves the decisions into exact timestamps, Remotion renders the whole picture (cards in the top half, you in the bottom half), and plain code drives your editor with exact values. No model improvises inside the editor.
+3. **Where a rule can be checked, it is enforced in code** — a bad generation can't ship a 12-word hook, music louder than your voice, or a black-and-white export.
+4. **It watches the result before calling it done** — the export is compared with the render (colour, length, every card at its time), and in Full mode a model reviews a contact sheet against what you're saying.
+5. **It's cheap on purpose**: a handful of small LLM calls (translation only for non-English speech), each with a hard dollar cap.
 
 Built for creators who explain technical topics — system design (HLD/LLD), AI, engineering — but nothing in it is specific to tech.
 
@@ -40,9 +41,9 @@ cp .env.example .env.local     # paste your Edits access token (Settings → Aut
 npm start                      # → http://127.0.0.1:4399
 ```
 
-Open the dashboard, enter the absolute path of your video (and, optionally, your script), choose **Fast** (Haiku) or **High** (Sonnet + frame-by-frame QA), and press **Run workflow**. Tick **Dry run** first to plan and render the cards without touching your editor (≈ $0.15).
+Open the dashboard, enter the absolute path of your video (optionally: your script, the links you talk about — e.g. your GitHub repo — and names to spell right), choose the quality check (**Full** adds an AI review of the export) and press **Run workflow**. Tick **Dry run** first to plan and render without touching your editor (≈ $0.15).
 
-**Prerequisites:** macOS · the **Edits** desktop app, open, with Automation enabled (the only supported editor; unofficial integration) · [Claude Code](https://claude.com/claude-code) CLI, logged in · `ffmpeg`/`ffprobe` on PATH · Node ≥ 22.18.
+**Prerequisites:** macOS · the **Edits** desktop app, open, with Automation enabled (the only supported editor; unofficial integration) · [Claude Code](https://claude.com/claude-code) CLI, logged in · `ffmpeg`/`ffprobe` on PATH · Node ≥ 22.18 · optional: **Screen Recording** permission for your terminal (for real screenshots of the Edits app).
 
 <div align="center">
 <img src="docs/assets/dashboard.png" alt="Instaedits dashboard: creative direction summary and live step-by-step progress with model, tokens, cost and time per step" width="560">
@@ -54,9 +55,9 @@ Open the dashboard, enter the absolute path of your video (and, optionally, your
 The script is **optional**. Leave it empty and Instaedits transcribes your audio. Pick the spoken language in the dashboard:
 
 - **English, no script** — the transcript *is* the script; no extra LLM call.
-- **Hindi (or another language)** — the audio is transcribed, **translated to English sentence by sentence**, and every card, hook and stat is written in **English**. Captions stay in the spoken language. Cards are placed by sentence number (`#3`), so timing never depends on matching words across languages.
+- **Hindi (or another language)** — the audio is transcribed, **translated to English sentence by sentence**, and every card, hook and stat is written in **English**. **Captions are Latin-script Hinglish** ("bhai ye pura video Claude ne edit kiya hai"), written by a small model with a deterministic fallback so no Devanagari ever reaches the screen. Cards are placed by sentence number (`#3`) plus the exact spoken word, so timing never depends on matching words across languages.
 
-Hinglish needs care: speech recognition often drops the English words inside Hindi speech (Kafka, `99.99%`). Instaedits runs a **second, English-model pass** over the same audio and gives the translator both versions; where a word is still missing it writes `[?]` and the director avoids building claims on it. If a term matters, put it in the optional script box as a hint.
+Hinglish needs care: speech recognition often drops the English words inside Hindi speech (Kafka, `99.99%`). Instaedits runs a **second, English-model pass** over the same audio and gives the translator both versions; where a word is still missing it writes `[?]` and the director avoids building claims on it. Names that recognition mishears (it hears *Remotion* as "emotion") are fixed with a glossary: the **Terms** field, or the default list in `config.mjs`.
 
 ## Mention a tool or a GitHub repo? It shows the real thing
 
@@ -64,7 +65,18 @@ When the speaker names an open-source project or a tool, the director can add a 
 
 Safety: fetched text and images go straight to Remotion — **never to an LLM** — so a web page can't inject instructions into the pipeline. Every URL passes an SSRF guard (https only, public hosts only, no ports, DNS results checked, redirects re-checked) so a model-suggested URL can't reach your local network or the Edits app. Set `GITHUB_TOKEN` (no scopes needed) to raise GitHub's limit from 60 to 5000 requests/hour.
 
+## Real screenshots of your tools
+
+Talking about the Edits app or its Automation (MCP) server? Instaedits captures **real screenshots** of the Edits editor (with your video on the timeline) and the Automation settings, and the director shows them as **Screen** cards. The access token on the settings screen is found with on-device OCR (Apple Vision) and painted over; the result is OCR'd again and **discarded if anything token-like is still readable**. Screenshots stay local (`screens/`, gitignored) and are never sent to a model.
+
+Prefer your own screenshot? `npm run screens -- edits-automation ~/Desktop/automation.png` — it goes through the same redaction (fail closed) and auto-capture never overwrites it. `npm run screens` re-captures everything now.
+
+GitHub repos are shown as the **actual repo page** (a fresh screenshot of `github.com/owner/name`), not a stats card.
+
 ## What you get
+
+Whenever a card shows, the frame **splits**: the card fills the top half, you stay visible in the bottom half (animated open/close, one accent seam). Between cards you're full-frame, with occasional punch-ins.
+
 
 | Card | Use it for |
 |---|---|
@@ -77,11 +89,12 @@ Safety: fetched text and images go straight to Remotion — **never to an LLM** 
 | **Stat** | A big count-up number: `99.99%`, `1.2M` |
 | **Compare / Bullets** | Trade-offs and takeaways |
 | **Repo** | A *real* GitHub repo — avatar, description, ★ count-up, forks, language, licence — fetched live |
-| **Site** | A *real* screenshot of a tool's official site in a browser frame, with its icon and description |
+| **Site** | A *real* screenshot of a tool's official site (or a GitHub repo page) in a browser frame, with its icon and description |
+| **Screen** | A *real*, token-redacted screenshot of the Edits app (editor or Automation settings), slowly pushing in |
 
 ![The card library: Flow, Code, Steps, Chart, Hook](docs/assets/cards.png)
 
-Plus, decided by the director and applied in the editor: **punch-in zooms**, **caption style + highlighted keywords**, **ducked background music**, **SFX on card entries**, a **subtle grade**, and **dead-air removal** (pauses > 0.4 s).
+Plus: **punch-in zooms**, **Hinglish captions** in 2–3-word lines (on the seam while a card shows, so your face stays clear), **ducked licensed music**, **SFX on card entries**, **voice loudness at −14 LUFS**, **dead-air removal** (pauses > 0.4 s) and a **1080×1920, 20 Mbit/s export**. No colour grade: your camera's colour is kept exactly.
 
 ## How it works
 
@@ -89,12 +102,12 @@ Plus, decided by the director and applied in the editor: **punch-in zooms**, **c
 flowchart LR
   A[script + video] --> B[transcript<br/>Edits app]
   B --> C[cut dead air<br/>ffmpeg]
-  C --> D[creative direction<br/>Claude Opus]
+  C --> D[understand + direct<br/>Claude Opus]
   D --> E[guardrails + resolve<br/>→ exact EDL]
-  E --> F[Remotion cards<br/>Claude Sonnet → render]
-  F --> G[execute EDL in Edits<br/>Sonnet / Haiku]
-  E --> G
-  G --> H[final.mp4]
+  E --> F[render the reel<br/>Remotion, split screen]
+  F --> G[captions · music · SFX · export<br/>Edits, plain tool calls]
+  G --> H[QA: compare + review]
+  H --> I[final.mp4]
 ```
 
 | # | Step | Runs on | LLM? |
@@ -102,16 +115,15 @@ flowchart LR
 | 1 | Probe the video | ffprobe | — |
 | 2 | Word-level transcript | Edits app (captions model) | — |
 | 3 | Cut dead air → `tight.mp4` | ffmpeg | — |
-| 4 | **Translate to English** (non-English speech only) | Claude Sonnet | ✅ |
-| 5 | **Creative direction** | Claude Opus | ✅ |
-| 6 | **Fetch real visuals** for named tools / repos (verified, see below) | GitHub API + headless Chrome | — |
+| 4 | **Translate to English** (non-English speech only), with the glossary | Claude Sonnet | ✅ |
+| 5 | **Understand the video + creative direction** (also captures the Edits screenshots) | Claude Opus | ✅ |
+| 6 | **Fetch real visuals** for named tools / repos (verified, see above) | GitHub API + headless Chrome | — |
 | 7 | Guardrails, then anchors → exact timestamps (the EDL) | local | — |
-| 8 | Write the Remotion scenes | Claude Sonnet | ✅ |
-| 9 | Render the cards | Remotion | — |
-| 10 | **Execute the EDL** in the editor | Claude Sonnet (High) / Haiku (Fast) | ✅ |
-| 11 | Verify the export | ffprobe | — |
+| 8 | **Render the reel**: speaker + cards in one pass, split layout, then −14 LUFS | Remotion + ffmpeg | — |
+| 9 | **Edits**: Hinglish captions, music, SFX, voice enhance, export — exact tool calls | Edits app (+ Claude Sonnet for Hinglish) | ✅ (captions only) |
+| 10 | **QA**: export vs render (length, colour, every card); Full mode: a model reviews a contact sheet | ffmpeg (+ Claude Sonnet) | ✅ (Full only) |
 
-Because you speak the script verbatim, step 5 finds each card's anchor phrase in the real transcript — cards land on the right word, not on a guessed timestamp. Deep dive: [docs/architecture.md](docs/architecture.md).
+The director names the sentence *and the spoken word* for each card; the resolver finds that word in the real transcript, so cards land as the thing is said, not on a guessed timestamp. Deep dive: [docs/architecture.md](docs/architecture.md).
 
 ## A real run, end to end
 
@@ -141,7 +153,7 @@ Because you speak the script verbatim, step 5 finds each card's anchor phrase in
 18.10s Stat   (2.4s)   riser starts 0.9s earlier
 zooms: 12.4s +1.2s → 110%,  20.7s +1.2s → 112%        (only where no card is showing)
 ```
-The editor model then follows that list. It makes no creative choices.
+Remotion renders exactly that timeline; the Edits step adds captions, music and SFX with plain tool calls. Nothing re-times it.
 </details>
 
 ## Editing rules (enforced in code where possible)
@@ -153,11 +165,13 @@ The prompt carries the creative doctrine ([`server/prompts.mjs`](server/prompts.
 | Hook works with sound off | **Code + tests:** opening Hook trimmed to ≤ 4 words, placed at 0.1 s |
 | Don't flood the viewer with sound | **Code + tests:** ≈ 1 SFX per 6 s, ≤ 1 riser, volumes clamped |
 | Voice stays dominant | **Code + tests:** music ≤ 0.16, ducked to ≤ 0.6× |
-| Emphasis stays meaningful | **Code + tests:** ≤ 10 % of words highlighted |
-| Cards are watchable | **Code + tests:** 1.5–4.5 s each; zooms only in card-free gaps; three-of-a-kind in a row is *flagged*, not fixed |
-| Respect the platform UI | **Layout constants + tests:** top 14 % / bottom 20 % kept clear |
+| Cards are watchable | **Code + tests:** 1.5–5.5 s each, never overlapping; malformed cards dropped; zooms only in card-free gaps; three-of-a-kind in a row is *flagged*, not fixed |
+| Cards land on the spoken word | **Code + tests:** sentence + word anchors resolved against the transcript |
+| Colour is never altered | **Code + tests:** no grade tool is ever called; QA fails a job whose export lost colour |
+| Captions readable, face clear | **Code + tests:** ≤ 3 words per line, split at real word gaps; on the seam during a card, at 72 % otherwise; Latin script only |
+| Respect the platform UI | **Layout constants:** card content kept below the top bar; captions above the bottom 20 % |
 | One hero colour | **Theme constants + WCAG contrast tests** |
-| Captions: 2–3 words per line at ~68 % height | **Instruction to the editor model** — checked by its frame QA pass in High mode, not by code |
+| Every card adds new information | **Instruction to the director** — reviewed by the Full-mode QA model, not enforced by code |
 
 The reasoning and its sources — including what we *didn't* trust — are in [docs/research.md](docs/research.md).
 
@@ -168,9 +182,11 @@ Everything environment-specific is in [`server/config.mjs`](server/config.mjs) a
 | What | Default | Override |
 |---|---|---|
 | Director model | `claude-opus-5-5` | `INSTAEDITS_MODEL_DIRECTOR` |
-| Code-gen model | `claude-sonnet-5-5` | `INSTAEDITS_MODEL_CODER` |
-| Editor model (High / Fast) | `claude-sonnet-5-5` / `claude-haiku-5-5` | `INSTAEDITS_MODEL_EDITOR_HIGH` / `_FAST` |
-| Spend caps per step | direction $1 · codegen $0.50 · edit $3 (High) / $1.50 (Fast) | the dashboard (edit step) |
+| Hinglish captions model | `claude-sonnet-5-5` | `INSTAEDITS_MODEL_CAPTIONS` |
+| QA reviewer model (Full) | `claude-sonnet-5-5` | `INSTAEDITS_MODEL_REVIEWER` |
+| Spend caps per step | direction $1 · translate $0.3 · captions $0.3 · review $0.4 | API `budgets` |
+| Glossary (names to spell right) | Remotion, Claude Code, Codex, Gemini, … | `INSTAEDITS_TERMS` or the dashboard's Terms field |
+| Screenshots folder | `./screens` (reused for 7 days) | `INSTAEDITS_SCREENS_DIR` |
 | Dashboard port | `4399` | `PORT` |
 | Jobs directory | `./jobs` | `INSTAEDITS_JOBS_DIR` |
 | Staging folder for the Edits app | `~/Movies/Instaedits` | `INSTAEDITS_STAGING_DIR` |
@@ -192,22 +208,25 @@ Everything environment-specific is in [`server/config.mjs`](server/config.mjs) a
 | Job stuck `running` after a crash | Restart `npm start`: interrupted jobs are marked resumable; use **Re-run from here**. |
 | `rate limit reached — set GITHUB_TOKEN` | A Repo card couldn't be fetched. Add a scope-less `GITHUB_TOKEN` to `.env.local`. |
 | Port already in use | `PORT=4500 npm start` |
+| `edits-editor skipped` / `screen capture failed` | Give your terminal **Screen Recording** permission (System Settings → Privacy & Security), then restart it. Instaedits briefly brings Edits to the front to capture the editor. |
+| `edits-automation skipped` | Open Edits → Settings → Automation once and leave the window open (reused for 7 days), or use your own: `npm run screens -- edits-automation <file.png>`. |
+| `QA failed: colour lost …` / `card … not on screen` | The export doesn't match the render. Check the Edits project it left open, then **Re-run from here** on the Edits step. |
 
 ## Status & roadmap
 
-**Beta.** The whole pipeline has now been run end to end — including the Edits app editing and exporting — on a synthetic Hindi test clip (11/11 steps, about $0.31). Direction, rule enforcement, timing resolution and rendering are covered by 180+ tests and CI. Real-footage testing is still ongoing, and a model driving a closed-source app may need prompt tuning on your machine; please open an issue with the dashboard log (and the *Editor's report* panel) if it misbehaves.
+**Beta.** Verified end to end on a real 24-second Hindi talking-head reel (10/10 steps, about $0.17 in model calls): split-screen cards on the spoken words, real screenshots of the Edits app (token redacted) and of the GitHub repo, Latin-script Hinglish captions, music, SFX, a 1080×1920 export — and QA confirming colour, length and every card at its time. 215+ tests and CI cover direction, guardrails, timing, the Edits executor (against a fake app), redaction and QA. Edits is a closed-source app whose automation API may change; if a step misbehaves, open an issue with the dashboard log.
 
-Known limits: overlay cards get fades, not transitions (the app's transition tool only works between adjacent clips) · the export may be HEVC when H.264 isn't offered · the Edits transcription may drop English words in Hindi speech (mitigated by the second pass, not eliminated) · macOS + Edits only · overlay cards are opaque full-frame · a repeated anchor phrase resolves to its first occurrence · the editing rules are heuristics from low-evidence sources, so measure your own retention.
+Known limits: the export is HEVC (the app offers no H.264) · the Edits transcription may drop English words in Hindi speech (mitigated by the second pass and the glossary, not eliminated) · macOS + Edits only · the Hinglish fallback transliteration is phonetic, not idiomatic · rendering a 25 s reel takes ~3 min · Voice Enhance depends on an app panel and is skipped (with a note) if the app refuses · the editing rules are heuristics from low-evidence sources, so measure your own retention.
 
 Roadmap: end-to-end verification on more real videos · occurrence-aware anchors · brand/profile theming · more card types (timeline, graph) · an HTTP workflow API for integrations. Ideas and PRs welcome.
 
 ## FAQ
 
-**Does my video get uploaded?** Instaedits itself uploads nothing: ffmpeg, Remotion and the Edits app run on your Mac, and your video is hard-linked into `~/Movies/Instaedits/<job>/` so the sandboxed Edits app can open it. Two things do leave your machine: **(1) the Edits app uploads your audio to its own servers to transcribe it** (we observed this: offline, transcription fails with `uploadFailed … Network is unreachable`), so an internet connection is required and Edits' privacy policy applies; **(2) Claude receives text only** — transcript sentences (and their English translation), timings and the storyboard — plus a few preview frames in High mode during the quality check.
+**Does my video get uploaded?** Instaedits itself uploads nothing: ffmpeg, Remotion and the Edits app run on your Mac, and your video is hard-linked into `~/Movies/Instaedits/<job>/` so the sandboxed Edits app can open it. Two things do leave your machine: **(1) the Edits app uploads your audio to its own servers to transcribe it** (we observed this: offline, transcription fails with `uploadFailed … Network is unreachable`), so an internet connection is required and Edits' privacy policy applies; **(2) Claude receives text only** — transcript sentences (and their English translation), timings and the storyboard — plus, in Full QA mode, one small contact sheet of frames from the export (one per card). Screenshots of the Edits app are never sent.
 
 **What does the Edits app do with my audio?** Transcription is a cloud call made by the Edits app (see above), and its music/SFX libraries are fetched from its servers. Check Edits' privacy policy if your footage is sensitive.
 
-**How much does a run cost?** Direction + code-gen is about $0.15 for a 25-second reel (measured). The editing step is capped at $1.50 (Fast) or $3 (High); steps are cached, so re-runs are cheaper.
+**How much does a run cost?** Measured on a 24-second Hindi reel: translation ≈ $0.01, direction ≈ $0.11, Hinglish captions and the QA review a few cents each. The edit itself costs nothing — it's plain tool calls. Steps are cached, so re-runs are cheaper.
 
 **Does it visit websites?** Only for Repo/Site cards: the GitHub API, and the official site of a tool the speaker names (opened in headless Chrome, public https hosts only). Nothing is sent from the page to an LLM.
 

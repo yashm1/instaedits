@@ -17,16 +17,16 @@ if (fs.existsSync(envFile)) {
 const env = process.env;
 
 export const config = {
-  // Models by ROLE. Override per role: INSTAEDITS_MODEL_DIRECTOR, _CODER, _EDITOR_HIGH, _EDITOR_FAST
+  // Models by ROLE. Override per role: INSTAEDITS_MODEL_DIRECTOR, _TRANSLATOR, _CAPTIONS, _REVIEWER
+  // Only creative/language judgement uses a model; rendering and the Edits edit itself are plain code.
   models: {
-    director: env.INSTAEDITS_MODEL_DIRECTOR || 'claude-opus-5-5',
-    coder: env.INSTAEDITS_MODEL_CODER || 'claude-sonnet-5-5',
+    director: env.INSTAEDITS_MODEL_DIRECTOR || 'claude-opus-5-5', // understands the video, plans every visual
     translator: env.INSTAEDITS_MODEL_TRANSLATOR || 'claude-sonnet-5-5', // non-English audio → English script
-    editorHigh: env.INSTAEDITS_MODEL_EDITOR_HIGH || 'claude-sonnet-5-5',
-    editorFast: env.INSTAEDITS_MODEL_EDITOR_FAST || 'claude-haiku-5-5',
+    captions: env.INSTAEDITS_MODEL_CAPTIONS || 'claude-sonnet-5-5', // Hindi captions → Latin-script Hinglish
+    reviewer: env.INSTAEDITS_MODEL_REVIEWER || 'claude-sonnet-5-5', // watches the export's contact sheet before "done"
   },
   // Hard USD caps per LLM step (passed to `claude --max-budget-usd`).
-  budgets: { direction: 1, translate: 0.3, codegen: 0.5, repair: 0.3, editHigh: 3, editFast: 1.5 },
+  budgets: { direction: 1, translate: 0.3, captions: 0.3, review: 0.4 },
   budgetCeiling: 10, // no request may raise a per-step cap above this (USD)
   claudeBin: env.CLAUDE_BIN || 'claude',
   editsUrl: env.METAPILOT_URL || 'http://127.0.0.1:19501/mcp',
@@ -35,6 +35,8 @@ export const config = {
   server: { host: '127.0.0.1', port: Number(env.PORT) || 4399 },
   // The Edits app is sandboxed: it can only read/write folders it has access to. ~/Movies works (verified).
   stagingDir: env.INSTAEDITS_STAGING_DIR || path.join(os.homedir(), 'Movies', 'Instaedits'),
+  // Real Edits screenshots (editor + Automation settings), token-redacted. Gitignored; refreshed when older than 7 days.
+  screensDir: env.INSTAEDITS_SCREENS_DIR || path.join(ROOT, 'screens'),
   jobsDir: env.INSTAEDITS_JOBS_DIR || path.join(ROOT, 'jobs'),
   remotionDir: path.join(ROOT, 'remotion'),
   canvas: { width: 1080, height: 1920, fps: 30 },
@@ -42,6 +44,8 @@ export const config = {
   githubApi: env.INSTAEDITS_GITHUB_API || 'https://api.github.com',
   githubToken: () => env.GITHUB_TOKEN,
   maxReferenceCards: 3,
+  // Names the creator says that speech recognition tends to mishear (e.g. "Remotion" → "emotion"). Per job: the Terms field.
+  defaultTerms: (env.INSTAEDITS_TERMS || 'Remotion, Claude Code, Claude, Codex, Gemini, Edits, Instagram, GitHub, MCP').split(',').map((t) => t.trim()).filter(Boolean),
   referenceTimeoutMs: 20000,
   videoExtensions: ['.mp4', '.mov', '.m4v', '.webm', '.mkv'],
 };
