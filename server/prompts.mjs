@@ -12,6 +12,8 @@ RETENTION DOCTRINE (distilled from editing guides; numbers are limits, not sugge
 - Rhythm: shots last 1.5-6s; never leave the plain talking head >4s untouched without a purpose. Cards 1.8-4.2s; after a card return to the speaker for ≥1.2s. Total card time 40-55% of the video.
 - Mid-video micro-hook: around 50-60% of the video, one Hook card (question or "here is the catch") that re-opens attention.
 - Progress cues: on multi-step explanations put 'tag' on every card ("STEP 2/4", "HLD", "RESULT").
+- LANGUAGE: all on-screen card text and hook text is ENGLISH, even if the speaker is not speaking English. Captions stay in the spoken language.
+- TRUST: the English lines may contain [?] where speech recognition dropped a word. Never put a claim, name or number on a card that depends on a [?] spot — pick a different idea for that sentence or keep the card generic. Never invent facts that are not in the text.
 - Pick the right card: sequence/pipeline → Flow or Steps; one→many → Fanout; numbers/proof → Stat or Chart; contrast → Compare; code/class/interface (LLD) → Code; takeaway → Hook or Bullets. Vary kinds (never 3 of one kind in a row). Card text ≤12 words, spoken vocabulary, real numbers from the script only. Never invent facts.
 - COLOUR: one hero accent on dark. Use 'hot' (≤2 words) and 'highlight' to mark the single thing to look at per card; do not decorate.
 - Payoff: last card = takeaway/result (Stat or Hook), then ~1s of speaker.
@@ -44,7 +46,7 @@ export const DIRECTOR_SCHEMA = {
         required: ['id', 'anchor', 'dur', 'kind', 'props', 'transition_in', 'transition_out'],
         properties: {
           id: { type: 'string', description: 'a1, a2, ...' },
-          anchor: { type: 'string', description: 'EXACT 3-6 consecutive words from the script where the card appears' },
+          anchor: { type: 'string', description: "EXACT 3-6 consecutive words from the script where the card appears — or '#N' (sentence number) when the sentences are numbered" },
           dur: { type: 'number' },
           kind: { enum: SCENE_KINDS },
           props: { type: 'object', description: 'Props for the kind — see library' },
@@ -83,14 +85,46 @@ export const DIRECTOR_SCHEMA = {
   },
 };
 
-export const directorPrompt = ({ script, sentences, duration, library }) => `Tight video length: ${duration.toFixed(1)}s.
+const LANG = { en: 'English', hi: 'Hindi' };
+export const languageName = (code) => LANG[code] ?? code;
+
+/**
+ * verbatim mode (English + script): sentences are plain text, anchors are verbatim words.
+ * indexed mode (non-English or no script): sentences are numbered, anchors are '#N' — language-independent;
+ * `s.en` carries the English translation when the speech is not English.
+ */
+export const directorPrompt = ({ sentences, duration, library, indexed = false, language = 'en' }) => {
+  const lines = sentences.map((s) => indexed
+    ? `[#${s.n} @${s.t.toFixed(1)}s] ${s.text}${s.en ? `  ||  EN: ${s.en}` : ''}`
+    : `[${s.t.toFixed(1)}] ${s.text}`).join('\n');
+  const rules = indexed
+    ? `ANCHORS: use "#N" (the sentence number, e.g. "#3") for every anchor, zoom and sfx anchor — never words.
+Card and hook text: ENGLISH (use the EN lines${language === 'en' ? '' : `; the speaker uses ${languageName(language)}`}).
+Caption "keywords": copy words VERBATIM from the spoken text (the part before "||"), because captions stay in the spoken language.`
+    : 'Anchors MUST be verbatim from the script above.';
+  return `Tight video length: ${duration.toFixed(1)}s.
 Card kinds & props:
 ${library}
 
-SCRIPT AS SPOKEN (start time on tight timeline → sentence):
-${sentences.map((s) => `[${s.t.toFixed(1)}] ${s.text}`).join('\n')}
+${indexed ? 'SPEECH, numbered (start time on the tight timeline)' : 'SCRIPT AS SPOKEN (start time on tight timeline → sentence)'}:
+${lines}
 
-Plan only as many cards as add new information (typically 1 per 3-4s of speech; ids a1..), zooms, sfx, captions, music, grade per your doctrine. Props must follow the kinds exactly. Anchors MUST be verbatim from the script above.`;
+Plan only as many cards as add new information (typically 1 per 3-4s of speech; ids a1..), zooms, sfx, captions, music, grade per your doctrine. Props must follow the kinds exactly. ${rules}`;
+};
+
+// ───────────────────────── 1b. TRANSLATE (Sonnet) — only for non-English speech ─────────────────────────
+export const TRANSLATE_SCHEMA = {
+  type: 'object', required: ['sentences'],
+  properties: { sentences: { type: 'array', items: { type: 'object', required: ['n', 'en'], properties: { n: { type: 'integer' }, en: { type: 'string' } } } } },
+};
+export const TRANSLATE_SYSTEM = `You translate spoken sentences into natural, concise English for an explainer video script. Keep technical terms, product names, code identifiers and numbers exactly (Hinglish: English words stay as they are). Do not summarise, merge, split or omit sentences.
+IMPORTANT — the main transcript comes from speech recognition that OFTEN DROPS English words said inside non-English speech (product names like Kafka, numbers, acronyms). Some sentences also carry an ALT line: a second, independent transcription of the same audio. ALT often keeps the English terms and numbers the main transcript dropped (but may garble the native words). Use ALT to fill gaps and to fix truncated numbers when it agrees with the sentence; the main transcript decides the sentence itself. Signs: a postposition or verb with its noun missing (e.g. Hindi "में नहीं" with nothing before it), or a number that looks truncated.
+- NEVER guess a product name, technology or number that is not in the text. Write [?] where a word was probably dropped, and keep every word you can see.
+- Fill a gap, or correct a number that looks truncated, only when ALT or the optional reference text supports it unambiguously. If neither does, write [?].
+Return ONLY JSON.`;
+export const translatePrompt = ({ sentences, language, reference }) => `Translate from ${languageName(language)} to English. One output per input, same "n".
+${reference ? `Reference (a rough English script the creator provided — use it only to resolve terminology, not to replace the translation):\n${reference.slice(0, 1500)}\n` : ''}
+${sentences.map((s) => `#${s.n}: ${s.text}${s.alt ? `\n    ALT: ${s.alt}` : ''}`).join('\n')}`;
 
 // ───────────────────────── 2. CODEGEN (Sonnet) ─────────────────────────
 export const codegenPrompt = ({ jobId }) => `Read ./LIBRARY.md and ../jobs/${jobId}/scenes.json, then write ./src/Scenes.tsx per the output contract exactly.
@@ -116,7 +150,7 @@ ${sc}
    For each card add transition_in at its start and transition_out at its end using the listed filter ids (addTransition).
 4) PUNCH-INS on the talking head (transform keyframes, smooth ease; return to 100% after the hold):
 ${zm}
-5) CAPTIONS: generateCaptions (source = composition audio, language en; do NOT enable extra auto-captions elsewhere), then setCaptionStyle "${c.style}", setCaptionHighlightColor ${c.highlightColor}, then setCaptionHighlights for these words wherever spoken: ${c.keywords.join(', ')}. Layout: 2-3 words per line (re-split if needed), as large as fits, centred horizontally with the caption block centred at ≈68% of frame height (inside the safe area: keep top 14% and bottom 20% clear). Cards deliberately leave that band empty. Highlight at most one word per line.
+5) CAPTIONS: generateCaptions (source = composition audio, language ${edl.language ?? 'en'}; do NOT enable extra auto-captions elsewhere), then setCaptionStyle "${c.style}", setCaptionHighlightColor ${c.highlightColor}, then setCaptionHighlights for these words wherever spoken: ${c.keywords.join(', ')}. Layout: 2-3 words per line (re-split if needed), as large as fits, centred horizontally with the caption block centred at ≈68% of frame height (inside the safe area: keep top 14% and bottom 20% clear). Cards deliberately leave that band empty. Highlight at most one word per line.${edl.language && edl.language !== 'en' ? ` The captions are in the SPOKEN language (${edl.language}): during QA confirm the caption style renders those glyphs correctly (no missing characters); if it does not, switch to caption style "Default" and say so in your final reply.` : ''}
 6) MUSIC: searchMusic "${m.query}" (fallbacks: ${m.fallbacks.join(' | ')}); add the best instrumental match at 0s, trim to ${edl.duration.toFixed(1)}s, volume ${m.volume}, fade in ${m.fadeIn}s, fade out ${m.fadeOut}s, auto-duck under voice (setDucking) to volume ${m.duckedVolume}.
 7) SFX (searchSoundEffects by exact name, pick exact title; place at the exact time, set the volume):
 ${fx}

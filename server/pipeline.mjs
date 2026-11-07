@@ -5,11 +5,12 @@ import { EventEmitter } from 'node:events';
 import { config } from './config.mjs';
 import { createQueue } from './queue.mjs';
 import { isSafeId, validateVideoPath } from './security.mjs';
+import { stagingFor, stageFile, stageDir } from './staging.mjs';
 import { runClaude, writeJson } from './claude.mjs';
 import * as P from './prompts.mjs';
 import { EDITS_URL, editsAuthHeaders } from './edits-mcp.mjs';
 import { applyGuardrails } from './guardrails.mjs';
-import { transcribe, planCuts, tighten, sentences, buildEdl, probe as probeVideo } from './media.mjs';
+import { transcribe, planCuts, tighten, sentences, attachAlt, buildEdl, probe as probeVideo } from './media.mjs';
 
 const REMOTION = config.remotionDir;
 const JOBS = config.jobsDir;
@@ -19,10 +20,12 @@ const queue = createQueue();
 export const bus = new EventEmitter();
 const jobs = new Map();
 
+export const STEPS_FOR_TEST = () => STEPS;
 export const STEP_DEFS = (q) => [
   { key: 'probe', title: 'Probe video', model: 'local (ffprobe)' },
   { key: 'transcribe', title: 'Word-level transcript', model: 'local (Edits captions model)' },
   { key: 'tighten', title: 'Cut dead air → tight.mp4', model: 'local (ffmpeg)' },
+  { key: 'translate', title: 'Translate speech → English script (non-English only)', model: config.models.translator },
   { key: 'direction', title: 'Creative direction: cards, zooms, captions, music, SFX', model: config.models.director },
   { key: 'resolve', title: 'Resolve anchors → exact timestamps (EDL)', model: 'local' },
   { key: 'codegen', title: 'Generate Remotion infographics', model: config.models.coder },
@@ -41,9 +44,12 @@ export function listJobs() {
 }
 export const getJob = (id) => !isSafeId(id) ? null : jobs.get(id)?.state ?? (fs.existsSync(path.join(JOBS, id, 'state.json')) ? JSON.parse(fs.readFileSync(path.join(JOBS, id, 'state.json'), 'utf8')) : null);
 
-const BUDGET_KEYS = ['direction', 'codegen', 'edit'];
-export function createJob({ script, video, quality = 'high', budgets = {}, jobId, dryRun = false }) {
-  if (typeof script !== 'string' || !script.trim()) throw new Error('script is required');
+const BUDGET_KEYS = ['direction', 'translate', 'codegen', 'edit'];
+export function createJob({ script = '', video, quality = 'high', budgets = {}, jobId, dryRun = false, language = 'en' }) {
+  // The script is OPTIONAL: without one we transcribe the speech (and translate it to English if it isn't English).
+  if (script !== null && typeof script !== 'string') throw new Error('script must be text');
+  script = (script ?? '').trim();
+  if (typeof language !== 'string' || !/^[a-z]{2,3}$/.test(language)) throw new Error('language must be a 2-3 letter code like "en" or "hi"');
   if (!['high', 'fast'].includes(quality)) throw new Error('quality must be "high" or "fast"');
   video = validateVideoPath(video);
   if (jobId !== undefined && !isSafeId(jobId)) throw new Error('invalid job id');
@@ -56,10 +62,10 @@ export function createJob({ script, video, quality = 'high', budgets = {}, jobId
   const id = jobId || `job-${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)}`;
   const dir = path.join(JOBS, id);
   fs.mkdirSync(path.join(dir, 'clips'), { recursive: true });
-  fs.writeFileSync(path.join(dir, 'script.txt'), script);
+  if (script) fs.writeFileSync(path.join(dir, 'script.txt'), script);
   const state = {
-    id, createdAt: Date.now(), status: 'queued', quality, dryRun: !!dryRun, video, script,
-    budgets: { direction: config.budgets.direction, codegen: config.budgets.codegen, edit: quality === 'high' ? config.budgets.editHigh : config.budgets.editFast, ...caps },
+    id, createdAt: Date.now(), status: 'queued', quality, dryRun: !!dryRun, language, scriptProvided: !!script, video, script,
+    budgets: { direction: config.budgets.direction, translate: config.budgets.translate, codegen: config.budgets.codegen, edit: quality === 'high' ? config.budgets.editHigh : config.budgets.editFast, ...caps },
     steps: STEP_DEFS(quality).map((s) => ({ ...s, status: 'pending', log: [], cost: 0, tokens: { in: 0, out: 0 } })),
   };
   const job = { id, dir, state, abort: new AbortController() };
@@ -113,10 +119,11 @@ export async function runJob(job, { from = 'probe' } = {}) {
   try {
     for (const step of s.steps.slice(startIdx)) {
       if (s.dryRun && (step.key === 'edit' || step.key === 'verify')) { step.status = 'skipped'; step.log = ['dry run — Edits step skipped']; save(job); continue; }
-      step.status = 'running'; step.startedAt = Date.now(); step.log = []; save(job);
+      step.status = 'running'; step.startedAt = Date.now(); step.log = []; delete step.error; save(job); // a re-run must not show the previous attempt's error
       const log = (m) => { step.log.push(m); if (step.log.length > 80) step.log.shift(); save(job); };
       try {
         const r = await STEPS[step.key](job, step, log);
+        if (r?.skipped) { step.status = 'skipped'; step.cost = 0; log(`↷ ${r.skipped}`); continue; }
         if (r) { step.cost = r.cost ?? 0; step.tokens = r.tokens ?? step.tokens; }
         step.status = 'done';
       } catch (e) {
@@ -142,7 +149,9 @@ const STEPS = {
   },
 
   async transcribe(job, step, log) {
-    await transcribe(job.state.video, job.dir, log);
+    // Edits is sandboxed: hand it a link to the source inside its staging folder, not the original path.
+    const src = stageFile(job.state.video, path.join(stagingFor(job.id), `source${path.extname(job.state.video).toLowerCase()}`));
+    await transcribe(src, job.dir, log, job.state.language);
   },
 
   async tighten(job, step, log) {
@@ -155,18 +164,46 @@ const STEPS = {
     log(`${job.state.duration.toFixed(1)}s → ${cuts.total.toFixed(1)}s (−${cuts.saved.toFixed(1)}s dead air)`);
   },
 
+  async translate(job, step, log) {
+    const st = job.state;
+    if (st.language === 'en') return { skipped: 'speech is English — no translation needed' };
+    const { words } = JSON.parse(fs.readFileSync(f(job, 'transcript.json'), 'utf8'));
+    const cuts = planCuts(words, st.duration);
+    const altFile = f(job, 'transcript.alt.json');
+    const sents = attachAlt(sentences(words, cuts.toOut), fs.existsSync(altFile) ? JSON.parse(fs.readFileSync(altFile, 'utf8')).words : [], cuts.toOut);
+    const cache = f(job, 'sentences.json');
+    if (fs.existsSync(cache)) { st.scriptEn = JSON.parse(fs.readFileSync(cache, 'utf8')).map((x) => x.en).join(' '); log('♻️ translation cached'); return; }
+    const r = await runClaude({
+      model: config.models.translator, system: P.TRANSLATE_SYSTEM, schema: P.TRANSLATE_SCHEMA, effort: 'low',
+      prompt: P.translatePrompt({ sentences: sents, language: st.language, reference: st.script }),
+      cwd: job.dir, budget: st.budgets.translate ?? config.budgets.translate, onEvent: log, signal: job.abort.signal,
+    });
+    const out = r.structured ?? JSON.parse(r.text.match(/\{[\s\S]*\}/)[0]);
+    const en = new Map(out.sentences.map((x) => [x.n, String(x.en ?? '').trim()]));
+    const missing = sents.filter((x) => !en.get(x.n)).map((x) => x.n);
+    if (missing.length) throw new Error(`translation is missing sentence(s) ${missing.join(', ')} — re-run this step`);
+    const merged = sents.map(({ alt, ...x }) => ({ ...x, en: en.get(x.n) })); // alt is translation input only
+    writeJson(cache, merged);
+    fs.writeFileSync(f(job, 'script.en.txt'), merged.map((x) => x.en).join('\n'));
+    st.scriptEn = merged.map((x) => x.en).join(' ');
+    log(`🌐 ${merged.length} sentences → English: “${merged[0].en.slice(0, 90)}…”`);
+    return r;
+  },
+
   async direction(job, step, log) {
     if (fs.existsSync(f(job, 'direction.json'))) { log('♻️ direction.json exists — reusing (no tokens spent)'); return; }
     const { words } = JSON.parse(fs.readFileSync(f(job, 'transcript.json'), 'utf8'));
     const cuts = planCuts(words, job.state.duration);
     const library = fs.readFileSync(path.join(REMOTION, 'LIBRARY.md'), 'utf8').split('\n').filter((l) => l.startsWith('- `') || l.startsWith('Icons')).join('\n');
+    const indexed = job.state.language !== 'en'; // numbered sentences + "#N" anchors: works in any language
+    const sents = indexed && fs.existsSync(f(job, 'sentences.json')) ? JSON.parse(fs.readFileSync(f(job, 'sentences.json'), 'utf8')) : sentences(words, cuts.toOut);
     const r = await runClaude({
       model: config.models.director, system: P.DIRECTOR_SYSTEM, schema: P.DIRECTOR_SCHEMA, effort: 'medium',
-      prompt: P.directorPrompt({ script: job.state.script, sentences: sentences(words, cuts.toOut), duration: cuts.total, library }),
+      prompt: P.directorPrompt({ sentences: sents, duration: cuts.total, library, indexed, language: job.state.language }),
       cwd: job.dir, budget: job.state.budgets.direction, onEvent: log, signal: job.abort.signal,
     });
     const raw = r.structured ?? JSON.parse(r.text.match(/\{[\s\S]*\}/)[0]);
-    const { direction: d, notes } = applyGuardrails(raw, { totalSeconds: cuts.total, scriptWordCount: job.state.script.trim().split(/\s+/).length });
+    const { direction: d, notes } = applyGuardrails(raw, { totalSeconds: cuts.total, scriptWordCount: words.length });
     notes.forEach((n) => log(`🛡 ${n}`));
     writeJson(f(job, 'direction.json'), d);
     job.state.direction = { concept: d.concept, cards: d.scenes.length, zooms: d.zooms.length, sfx: d.sfx.length, captions: `${d.captions.style} · ${d.captions.highlightColor}`, music: `${d.music.query} @ ${d.music.volume} (ducked ${d.music.duckedVolume})` };
@@ -178,7 +215,7 @@ const STEPS = {
     const { words } = JSON.parse(fs.readFileSync(f(job, 'transcript.json'), 'utf8'));
     const cuts = planCuts(words, job.state.duration);
     const d = JSON.parse(fs.readFileSync(f(job, 'direction.json'), 'utf8'));
-    const edl = buildEdl(d, words, cuts, log);
+    const edl = buildEdl(d, words, cuts, log, sentences(words, cuts.toOut), job.state.language);
     writeJson(f(job, 'edl.json'), edl);
     writeJson(f(job, 'scenes.json'), { remotion_brief: d.remotion_brief, scenes: edl.scenes.map(({ id, kind, dur, props }) => ({ id, kind, dur, props })) });
     for (const x of fs.readdirSync(f(job, 'clips'))) fs.unlinkSync(f(job, 'clips', x)); // stale clips from older plans
@@ -228,9 +265,14 @@ const STEPS = {
 
   async edit(job, step, log) {
     const edl = JSON.parse(fs.readFileSync(f(job, 'edl.json'), 'utf8'));
-    const out = f(job, 'final.mp4');
+    const stage = stagingFor(job.id);
+    const tight = stageFile(f(job, 'tight.mp4'), path.join(stage, 'tight.mp4'));
+    const clipsDir = stageDir(f(job, 'clips'), path.join(stage, 'clips'));
+    const out = path.join(stage, 'final.mp4'); // Edits can write here; it cannot write into jobs/
+    fs.rmSync(out, { force: true });
+    log(`staged for Edits → ${stage}`);
     const r = await runClaude({
-      model: step.model, system: P.editSystem, prompt: P.editPrompt({ tight: f(job, 'tight.mp4'), clipsDir: f(job, 'clips'), edl, out, quality: job.state.quality }),
+      model: step.model, system: P.editSystem, prompt: P.editPrompt({ tight, clipsDir, edl, out, quality: job.state.quality }),
       mcpServers: editsMcpServers(), allowed: `mcp__${config.editsServer}`, tools: '', cwd: job.dir,
       budget: job.state.budgets.edit, onEvent: log, signal: job.abort.signal,
     });
@@ -239,10 +281,10 @@ const STEPS = {
   },
 
   async verify(job, step, log) {
-    const out = f(job, 'final.mp4');
-    if (!fs.existsSync(out)) throw new Error('final.mp4 not found — the Edits export did not land at the requested path');
+    const out = path.join(stagingFor(job.id), 'final.mp4');
+    if (!fs.existsSync(out)) throw new Error(`final.mp4 not found at ${out} — the Edits export did not land at the requested path`);
     const info = probeVideo(out);
-    log(`final.mp4 ${parseFloat(info.format.duration).toFixed(1)}s ✔`);
+    log(`final.mp4 ${parseFloat(info.format.duration).toFixed(1)}s ✔  → ${out}`);
     job.state.output = out;
   },
 };

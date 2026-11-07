@@ -19,6 +19,8 @@ flowchart LR
 | File (in `jobs/<id>/`) | Produced by | Consumed by |
 |---|---|---|
 | `transcript.json` | Edits `transcribeClip` | cuts, direction, resolver |
+| `transcript.alt.json` | Edits `transcribeClip` (English pass, non-English speech only) | translator |
+| `sentences.json` | translator (numbered sentences + English) | director, resolver (`#N` anchors) |
 | `tight.mp4` + `cuts.json` | ffmpeg | the editor (never re-cut) |
 | `direction.json` | Opus, then guardrails | resolver |
 | `edl.json` | resolver (anchors → exact seconds) | edit prompt |
@@ -33,6 +35,9 @@ flowchart LR
 - `guardrails.mjs` — numeric limits the prompt can only ask for.
 - `prompts.mjs`, `catalog.mjs` — creative doctrine and the options verified to exist in the Edits app.
 - `security.mjs`, `queue.mjs`, `index.mjs` — localhost hardening, one-job-at-a-time queue, HTTP/SSE API.
+
+## Staging (the Edits app is sandboxed)
+Edits can only open and write folders it has access to. Everything it touches — source video, `tight.mp4`, rendered cards, the export — is hard-linked into `~/Movies/Instaedits/<job>/` (`server/staging.mjs`). `jobs/` is never handed to Edits.
 
 ## Why jobs run one at a time
 There is one Edits app to drive and one shared Remotion workspace (`remotion/src/Scenes.tsx`).

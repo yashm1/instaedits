@@ -29,7 +29,9 @@ pre{margin:0;padding:10px 12px;background:var(--bg);border-top:1px solid var(--l
 </style></head><body><main>
 <section class="card">
   <h1>Instaedits</h1><div class="sub">Script + video → Remotion cards → edited reel</div>
-  <label>Script</label><textarea id="script" placeholder="Paste your reel script…"></textarea>
+  <label>Script <span class="m">(optional)</span></label><textarea id="script" placeholder="Optional. Paste your script, or just key terms (Kafka, Cassandra, 99.99%…). Leave empty to transcribe the audio. Tip: for Hindi/Hinglish, English words are often dropped by transcription — key terms here fix that."></textarea>
+  <label>Spoken language</label>
+  <select id="lang"><option value="en">English</option><option value="hi">Hindi (हिन्दी) — transcribed, translated to English, graphics in English</option></select>
   <label>Video file location</label><input id="video" placeholder="/Users/you/Movies/reel.mp4">
   <div class="hint">Absolute path. Tip: drag the file into Terminal to copy its path.</div>
   <label>Edit quality</label>
@@ -42,6 +44,7 @@ pre{margin:0;padding:10px 12px;background:var(--bg);border-top:1px solid var(--l
 <section>
   <div class="bar"><div><b id="jid">No job yet</b> <span class="m" id="jstat"></span></div><div class="total" id="total"></div></div>
   <div id="dir"></div>
+  <div id="script_en"></div>
   <div id="steps"></div>
 </section></main>
 <script>
@@ -54,6 +57,7 @@ function render(j){
   $('dir').innerHTML=j.direction?`<div class="card" style="margin-bottom:12px"><b>🎬 Direction</b> <span class="m">${esc(j.direction.concept)}</span>
    <div class="m" style="margin-top:6px">Captions: ${esc(j.direction.captions)} · Music: ${esc(j.direction.music)} · ${j.direction.cards} cards · ${j.direction.zooms} punch-ins · ${j.direction.sfx} SFX${j.tight?` · dead air cut: ${j.tight.saved}s`:''}</div>
    ${j.edl?`<div class="m" style="margin-top:6px">Timeline: ${j.edl.cards.map(esc).join(' · ')}</div>`:''}</div>`:'';
+  $('script_en').innerHTML=j.scriptEn?`<details class="card" style="margin-bottom:12px"><summary><b>🌐 English script</b> <span class="m">from the audio (${esc(j.language)})</span></summary><div class="m" style="margin-top:8px;white-space:pre-wrap">${esc(j.scriptEn)}</div></details>`:'';
   $('steps').innerHTML=j.steps.map((s,i)=>`<div class="step ${s.status}"><div class="sh"><span class="dot"></span>
    <div><div class="t">${i+1}. ${esc(s.title)}</div><div class="m">${esc(s.model)}</div></div><span class="sp"></span>
    <span class="pill">${s.tokens.in||s.tokens.out?`${s.tokens.in}↑ ${s.tokens.out}↓ · $${s.cost.toFixed(3)} · `:''}${s.startedAt?dur(s)+'s':''}</span>
@@ -64,7 +68,7 @@ function render(j){
 function watch(id){es?.close();es=new EventSource('/api/events/'+id);es.onmessage=e=>render(JSON.parse(e.data));}
 async function post(u,b){const r=await fetch(u,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b||{})});const d=await r.json();if(!r.ok)throw new Error(d.error);return d}
 $('run').onclick=async()=>{$('msg').textContent='';try{
-  const b={script:$('script').value,video:$('video').value,quality:$('quality').value,dryRun:$('dry').checked};
+  const b={script:$('script').value,video:$('video').value,quality:$('quality').value,dryRun:$('dry').checked,language:$('lang').value};
   if($('budget').value)b.budgets={edit:+$('budget').value};
   const {id}=await post('/api/run',b);watch(id);loadJobs();}catch(e){$('msg').textContent=e.message}};
 window.resume=async from=>{await post('/api/resume/'+cur,{from});watch(cur)};

@@ -28,9 +28,11 @@ function extractWords(x, acc = []) {
 }
 
 /**
- * Word timestamps from the Edits app's own captions model (default): zero LLM tokens, nothing extra to install.
+ * Word timestamps from the Edits app's own captions model: zero LLM tokens, nothing extra to install.
+ * For non-English speech a SECOND pass with the English model is stored as transcript.alt.json: in practice it keeps
+ * English terms and numbers (Kafka, 99.99%) that the native pass drops. Best-effort — never fails the step.
  */
-export async function transcribe(video, dir, log) {
+export async function transcribe(video, dir, log, language = 'en') {
   const out = path.join(dir, 'transcript.json');
   if (fs.existsSync(out)) { log('♻️ transcript cached'); return JSON.parse(fs.readFileSync(out, 'utf8')); }
   log('Edits app: new project + import…');
@@ -38,13 +40,33 @@ export async function transcribe(video, dir, log) {
   const imp = await editsTool('importMedia', { path: video });
   const id = imp?.id ?? imp?.itemId ?? imp?.clipId ?? imp?.items?.[0]?.id ?? imp?.item?.id;
   if (!id) throw new Error('importMedia returned no id: ' + JSON.stringify(imp).slice(0, 200));
-  log('Edits app: transcribing…');
-  const tr = await editsTool('transcribeClip', { id, language: 'en', mergeSplitWords: true });
+  log(`Edits app: transcribing (${language})…`);
+  const tr = await editsTool('transcribeClip', { id, language, mergeSplitWords: true });
   const words = extractWords(tr.words ?? tr);
   if (!words.length) throw new Error('no words in transcript');
+  if (language !== 'en') {
+    try {
+      log('Edits app: second pass (en) to recover English terms…');
+      const alt = extractWords((await editsTool('transcribeClip', { id, language: 'en', mergeSplitWords: true })).words ?? []);
+      fs.writeFileSync(path.join(dir, 'transcript.alt.json'), JSON.stringify({ words: alt }));
+      log(`alt pass: ${alt.length} words`);
+    } catch (e) { log(`⚠️ alt pass skipped: ${e.message.slice(0, 120)}`); }
+  }
   fs.writeFileSync(out, JSON.stringify({ words }));
   log(`${words.length} words aligned`);
   return { words };
+}
+
+/**
+ * Attach to each sentence the alt-pass words spoken during it (matched by time on the tight timeline).
+ * Two independent passes jitter by a few tenths of a second, so each window is shifted back by `tol`.
+ */
+export function attachAlt(sents, altWords, toOut, tol = 0.3) {
+  return sents.map((x, i) => {
+    const end = sents[i + 1]?.t ?? Infinity;
+    const text = altWords.filter((w) => { const t = toOut(w.start); return t >= x.t - tol && t < end - tol; }).map((w) => w.w).join(' ');
+    return text ? { ...x, alt: text } : x;
+  });
 }
 
 /** Cut dead air: keep speech segments (+pad), drop gaps > maxGap. Returns segments + src→out time map. */
@@ -79,13 +101,30 @@ export async function tighten(video, segs, outFile, log, signal) {
     '-c:v', 'libx264', '-crf', '15', '-preset', 'medium', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '256k', '-fps_mode', 'cfr', outFile], { signal });
 }
 
-/** Sentences on the TIGHT timeline — compact context for the director (cheap in tokens). */
-export function sentences(words, toOut) {
-  const out = []; let cur = [];
-  const flush = () => { if (cur.length) { out.push({ t: toOut(cur[0].start), text: cur.map((w) => w.w).join(' ') }); cur = []; } };
-  words.forEach((w, i) => { cur.push(w); const gap = words[i + 1] ? words[i + 1].start - w.end : 9; if (/[.?!]$/.test(w.w) || gap > 0.7) flush(); });
-  flush();
-  return out;
+/**
+ * Sentences on the TIGHT timeline, numbered from 1 — compact context for the director (cheap in tokens) and the
+ * language-independent anchor system ("#3" = start of sentence 3).
+ * Boundaries: . ? ! । (danda) and pauses > 0.7 s. Many transcripts (e.g. Edits' Hindi) carry NO punctuation, so any chunk
+ * longer than `maxWords` words or `maxSeconds` seconds is split again at its largest internal pause — otherwise a whole
+ * video becomes one "sentence" and every card collapses onto "#1".
+ * Deterministic: direction and resolve both call this on the same transcript and get the same numbering.
+ */
+export function sentences(words, toOut, { maxWords = 14, maxSeconds = 6 } = {}) {
+  const chunks = []; let cur = [];
+  words.forEach((w, i) => { cur.push(w); const gap = words[i + 1] ? words[i + 1].start - w.end : 9; if (/[.?!।]$/.test(w.w) || gap > 0.7) { chunks.push(cur); cur = []; } });
+  if (cur.length) chunks.push(cur);
+
+  const split = (c) => {
+    const tooLong = c.length > maxWords || c[c.length - 1].end - c[0].start > maxSeconds;
+    if (!tooLong || c.length < 6) return [c];
+    const mid = c.length / 2; let k = -1, best = -1;
+    for (let i = 3; i <= c.length - 3; i++) { // keep ≥3 words on each side
+      const gap = c[i].start - c[i - 1].end;
+      if (gap > best + 1e-9 || (Math.abs(gap - best) <= 1e-9 && Math.abs(i - mid) < Math.abs(k - mid))) { best = gap; k = i; }
+    }
+    return k < 0 ? [c] : [...split(c.slice(0, k)), ...split(c.slice(k))];
+  };
+  return chunks.flatMap(split).map((c, i) => ({ n: i + 1, t: toOut(c[0].start), text: c.map((w) => w.w).join(' ') }));
 }
 
 const lcs = (a, b) => {
@@ -114,8 +153,14 @@ export function findAnchor(words, anchor, from = 0) {
 }
 
 /** Compile the director's anchors into absolute tight-timeline seconds → the Edit Decision List. */
-export function buildEdl(direction, words, cuts, log) {
-  const at = (anchor, from) => { const i = findAnchor(words, anchor, from); return i < 0 ? null : { i, t: cuts.toOut(words[i].start) }; };
+export function buildEdl(direction, words, cuts, log, sents = null, language = 'en') {
+  const bySentence = sents ? new Map(sents.map((x) => [x.n, x.t])) : null;
+  const at = (anchor, from) => {
+    const m = /^\s*#(\d+)\s*$/.exec(anchor ?? '');
+    if (m) return bySentence?.has(+m[1]) ? { i: -1, t: bySentence.get(+m[1]) } : null; // language-independent sentence anchor
+    const i = findAnchor(words, anchor, from);
+    return i < 0 ? null : { i, t: cuts.toOut(words[i].start) };
+  };
   let prevEnd = 0;
   const scenes = [];
   for (const s of [...direction.scenes]) {
@@ -124,7 +169,7 @@ export function buildEdl(direction, words, cuts, log) {
     scenes.push({ ...s, t: hit.t });
   }
   scenes.sort((a, b) => a.t - b.t);
-  const edl = { duration: cuts.total, scenes: [], zooms: [], sfx: [] };
+  const edl = { duration: cuts.total, language, scenes: [], zooms: [], sfx: [] };
   scenes.forEach((s, idx) => {
     // opening Hook lands on the very first frames (silent-test: premise readable with sound off)
     const start = idx === 0 && s.kind === 'Hook' && s.t < 1.5 ? 0.1 : Math.max(prevEnd + 0.45, s.t - 0.08);

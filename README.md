@@ -27,7 +27,7 @@ Most "AI video editors" cut your footage and sprinkle effects. Instaedits works 
 1. **One strong model decides everything creative, once** — what to show on which sentence, where to zoom, how loud the music is, which captions to emphasise.
 2. **Everything after that is mechanical** — local code resolves the decisions into exact timestamps, Remotion renders the cards, a cheaper model just executes the list inside your editor.
 3. **Where a rule can be checked, it is enforced in code** — a bad generation can't ship a 12-word hook or music louder than your voice.
-4. **It's cheap on purpose**: 3 of 9 steps use an LLM, each with a hard dollar cap.
+4. **It's cheap on purpose**: only 3–4 of the 10 steps use an LLM (translation runs only for non-English speech), each with a hard dollar cap.
 
 Built for creators who explain technical topics — system design (HLD/LLD), AI, engineering — but nothing in it is specific to tech.
 
@@ -40,7 +40,7 @@ cp .env.example .env.local     # paste your Edits access token (Settings → Aut
 npm start                      # → http://127.0.0.1:4399
 ```
 
-Open the dashboard, paste your script, enter the absolute path of your video, choose **Fast** (Haiku) or **High** (Sonnet + frame-by-frame QA), and press **Run workflow**. Tick **Dry run** first to plan and render the cards without touching your editor (≈ $0.15).
+Open the dashboard, enter the absolute path of your video (and, optionally, your script), choose **Fast** (Haiku) or **High** (Sonnet + frame-by-frame QA), and press **Run workflow**. Tick **Dry run** first to plan and render the cards without touching your editor (≈ $0.15).
 
 **Prerequisites:** macOS · the **Edits** desktop app, open, with Automation enabled (the only supported editor; unofficial integration) · [Claude Code](https://claude.com/claude-code) CLI, logged in · `ffmpeg`/`ffprobe` on PATH · Node ≥ 22.18.
 
@@ -48,6 +48,15 @@ Open the dashboard, paste your script, enter the absolute path of your video, ch
 <img src="docs/assets/dashboard.png" alt="Instaedits dashboard: creative direction summary and live step-by-step progress with model, tokens, cost and time per step" width="560">
 <br><sub>The dashboard: every step, which model ran it, tokens, cost and time. Any step can be re-run from there without re-paying for earlier ones.</sub>
 </div>
+
+## No script? Hindi video? No problem
+
+The script is **optional**. Leave it empty and Instaedits transcribes your audio. Pick the spoken language in the dashboard:
+
+- **English, no script** — the transcript *is* the script; no extra LLM call.
+- **Hindi (or another language)** — the audio is transcribed, **translated to English sentence by sentence**, and every card, hook and stat is written in **English**. Captions stay in the spoken language. Cards are placed by sentence number (`#3`), so timing never depends on matching words across languages.
+
+Hinglish needs care: speech recognition often drops the English words inside Hindi speech (Kafka, `99.99%`). Instaedits runs a **second, English-model pass** over the same audio and gives the translator both versions; where a word is still missing it writes `[?]` and the director avoids building claims on it. If a term matters, put it in the optional script box as a hint.
 
 ## What you get
 
@@ -85,12 +94,13 @@ flowchart LR
 | 1 | Probe the video | ffprobe | — |
 | 2 | Word-level transcript | Edits app (captions model) | — |
 | 3 | Cut dead air → `tight.mp4` | ffmpeg | — |
-| 4 | **Creative direction** | Claude Opus | ✅ |
-| 5 | Guardrails, then anchors → exact timestamps (the EDL) | local | — |
-| 6 | Write the Remotion scenes | Claude Sonnet | ✅ |
-| 7 | Render the cards | Remotion | — |
-| 8 | **Execute the EDL** in the editor | Claude Sonnet (High) / Haiku (Fast) | ✅ |
-| 9 | Verify the export | ffprobe | — |
+| 4 | **Translate to English** (non-English speech only) | Claude Sonnet | ✅ |
+| 5 | **Creative direction** | Claude Opus | ✅ |
+| 6 | Guardrails, then anchors → exact timestamps (the EDL) | local | — |
+| 7 | Write the Remotion scenes | Claude Sonnet | ✅ |
+| 8 | Render the cards | Remotion | — |
+| 9 | **Execute the EDL** in the editor | Claude Sonnet (High) / Haiku (Fast) | ✅ |
+| 10 | Verify the export | ffprobe | — |
 
 Because you speak the script verbatim, step 5 finds each card's anchor phrase in the real transcript — cards land on the right word, not on a guessed timestamp. Deep dive: [docs/architecture.md](docs/architecture.md).
 
@@ -154,6 +164,8 @@ Everything environment-specific is in [`server/config.mjs`](server/config.mjs) a
 | Spend caps per step | direction $1 · codegen $0.50 · edit $3 (High) / $1.50 (Fast) | the dashboard (edit step) |
 | Dashboard port | `4399` | `PORT` |
 | Jobs directory | `./jobs` | `INSTAEDITS_JOBS_DIR` |
+| Staging folder for the Edits app | `~/Movies/Instaedits` | `INSTAEDITS_STAGING_DIR` |
+| Translator model | `claude-sonnet-5-5` | `INSTAEDITS_MODEL_TRANSLATOR` |
 
 ## Troubleshooting
 
@@ -164,6 +176,7 @@ Everything environment-specific is in [`server/config.mjs`](server/config.mjs) a
 | `claude exited …` / login errors | Run `claude` once in a terminal and log in. |
 | `ffprobe: command not found` | `brew install ffmpeg` |
 | First render is slow | Remotion may download a headless browser on first use; later renders are fast. |
+| `importMedia … Sandbox bookmark unavailable` | The Edits app is sandboxed and can't read arbitrary folders. Instaedits stages everything it needs in `~/Movies/Instaedits/<job>/` (hard links, no extra disk). If your Movies folder is elsewhere, set `INSTAEDITS_STAGING_DIR`. |
 | Job shows `queued` | Jobs run one at a time (one editor, one Remotion workspace). Wait or cancel the running one. |
 | Job stuck `running` after a crash | Restart `npm start`: interrupted jobs are marked resumable; use **Re-run from here**. |
 | Port already in use | `PORT=4500 npm start` |
@@ -172,13 +185,13 @@ Everything environment-specific is in [`server/config.mjs`](server/config.mjs) a
 
 **Beta.** Direction, rule enforcement, timing resolution and rendering are covered by 90+ tests and CI. The last step — a model driving the Edits app (caption placement, music/SFX search, export) — depends on a closed-source app's tool surface and may need prompt tuning on your machine; please open an issue with the dashboard log if it misbehaves.
 
-Known limits: macOS + Edits only · overlay cards are opaque full-frame · a repeated anchor phrase resolves to its first occurrence · the editing rules are heuristics from low-evidence sources, so measure your own retention.
+Known limits: the Edits transcription may drop English words in Hindi speech (mitigated by the second pass, not eliminated) · macOS + Edits only · overlay cards are opaque full-frame · a repeated anchor phrase resolves to its first occurrence · the editing rules are heuristics from low-evidence sources, so measure your own retention.
 
 Roadmap: end-to-end verification on more real videos · occurrence-aware anchors · brand/profile theming · more card types (timeline, graph) · an HTTP workflow API for integrations. Ideas and PRs welcome.
 
 ## FAQ
 
-**Does my video get uploaded?** Your video is processed locally (ffmpeg, Remotion, the Edits app). Claude receives text only — your script, sentence timings and storyboard — plus a few preview frames in High mode during the quality check.
+**Does my video get uploaded?** Your video is processed locally (ffmpeg, Remotion, the Edits app); it is hard-linked into `~/Movies/Instaedits/<job>/` so the sandboxed Edits app can open it, and the final export lands there too. Claude receives text only — transcript sentences (and their English translation), timings and the storyboard — plus a few preview frames in High mode during the quality check.
 
 **What does the Edits app do with my audio?** Transcription and the music/SFX libraries come from the Edits app; whether any of it happens in its cloud is governed by *its* privacy policy. Check it if your footage is sensitive.
 

@@ -6,7 +6,7 @@ import { config } from '../server/config.mjs';
 import { canvas } from '../remotion/src/lib/theme.ts';
 
 test('defaults: models by role, localhost-only server, sane budgets', () => {
-  assert.deepEqual(config.models, { director: 'claude-opus-5-5', coder: 'claude-sonnet-5-5', editorHigh: 'claude-sonnet-5-5', editorFast: 'claude-haiku-5-5' });
+  assert.deepEqual(config.models, { director: 'claude-opus-5-5', coder: 'claude-sonnet-5-5', translator: 'claude-sonnet-5-5', editorHigh: 'claude-sonnet-5-5', editorFast: 'claude-haiku-5-5' });
   assert.equal(config.server.host, '127.0.0.1');
   assert.ok(config.budgetCeiling >= config.budgets.editHigh);
   for (const v of Object.values(config.budgets)) assert.ok(v > 0 && v <= config.budgetCeiling);
