@@ -137,3 +137,13 @@ test('doctrine tells the director to show real repos/sites only when certain, ca
   assert.ok(P.DIRECTOR_SCHEMA.properties.scenes.items.properties.kind.enum.includes('Repo'));
   assert.ok(P.DIRECTOR_SCHEMA.properties.scenes.items.properties.kind.enum.includes('Site'));
 });
+
+test('edit prompt: overlay cards get fades, not transitions (the transition tool only works between adjacent clips)', () => {
+  const t = ep();
+  assert.match(t, /Do NOT use addTransition/); assert.match(t, /setFade/); assert.match(t, /0\.15s/);
+  assert.doesNotMatch(t, /in:transition_|out:transition_/, 'per-card transition ids must not be listed any more');
+});
+
+test('edit prompt: H.264 preferred but HEVC is acceptable and must not be reported as a problem', () => {
+  assert.match(ep(), /H\.264 if the app offers it, otherwise HEVC/);
+});

@@ -69,6 +69,7 @@ test('createJob rejects traversal ids, bad quality, unknown or oversized budgets
     assert.throws(() => createJob({ script: 's', video: v, budgets: { evil: 1 } }), /unknown budget/);
     assert.throws(() => createJob({ script: 5, video: v }), /script must be text/);
     assert.throws(() => createJob({ script: 's', video: v, language: 'Hindi' }), /language must be/);
+    assert.throws(() => createJob({ script: 's', video: v, language: 'AUTO' }), /language must be/);
     assert.throws(() => createJob({ script: 's', video: v, language: 'e' }), /language must be/);
     assert.throws(() => createJob({ script: 's', video: v, budgets: { translate: 50 } }), /between 0 and/);
     assert.throws(() => createJob({ script: 's', video: '/etc/hosts' }), /must be one of/);
@@ -136,13 +137,13 @@ test('recoverStaleJobs marks interrupted jobs as resumable errors, leaves finish
   } finally { for (const j of [a, b]) fs.rmSync(j.dir, { recursive: true, force: true }); fs.rmSync(d, { recursive: true, force: true }); }
 });
 
-test('the script is OPTIONAL: no script is fine, language defaults to en, provided flag is recorded', () => {
+test('the script is OPTIONAL: no script is fine, language defaults to auto-detect, provided flag is recorded', () => {
   const { d, v } = tmpVideo();
   const a = createJob({ video: v, jobId: `tn-a-${Date.now()}` });
   const b = createJob({ script: '  ', video: v, language: 'hi', jobId: `tn-b-${Date.now()}` });
   const c = createJob({ script: 'hello', video: v, jobId: `tn-c-${Date.now()}` });
   try {
-    assert.equal(a.state.language, 'en'); assert.equal(a.state.scriptProvided, false);
+    assert.equal(a.state.language, 'auto'); assert.equal(a.state.scriptProvided, false);
     assert.equal(b.state.language, 'hi'); assert.equal(b.state.scriptProvided, false);
     assert.equal(c.state.scriptProvided, true);
     assert.ok(!fs.existsSync(path.join(a.dir, 'script.txt')), 'no empty script file');

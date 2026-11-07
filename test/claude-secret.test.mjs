@@ -50,6 +50,10 @@ test('writeSecretJson: dir 0700, file 0600, cleanup removes everything', () => {
 
 test('the temp file is cleaned up even when claude fails', async () => {
   fs.writeFileSync(fake, '#!/usr/bin/env node\nconsole.error("nope");process.exit(3)', { mode: 0o755 });
-  await assert.rejects(() => mod.runClaude({ model: 'm', prompt: 'x', mcpServers: { e: { type: 'http', url: 'u' } } }), /claude exited 3/);
-  assert.deepEqual(fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith('instaedits-')).filter((n) => fs.existsSync(path.join(os.tmpdir(), n, 'mcp.json'))), []);
+  const marker = `https://marker-${process.pid}-${Date.now()}.invalid`; // unique: other test files may create temp configs at the same time
+  await assert.rejects(() => mod.runClaude({ model: 'm', prompt: 'x', mcpServers: { e: { type: 'http', url: marker } } }), /claude exited 3/);
+  const leftovers = fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith('instaedits-')).filter((n) => {
+    try { return fs.readFileSync(path.join(os.tmpdir(), n, 'mcp.json'), 'utf8').includes(marker); } catch { return false; }
+  });
+  assert.deepEqual(leftovers, []);
 });

@@ -4,7 +4,8 @@ import path from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
 import { tool as editsTool } from './edits-mcp.mjs';
 
-const norm = (w) => w.toLowerCase().replace(/[^a-z0-9]/g, '');
+// Unicode-aware: letters, digits AND combining marks (Devanagari vowel signs are marks). The old [a-z0-9] stripped Hindi to nothing.
+const norm = (w) => w.toLowerCase().normalize('NFC').replace(/[^\p{L}\p{N}\p{M}]/gu, '');
 
 function run(cmd, args, { onLine, signal } = {}) {
   return new Promise((resolve, reject) => {
@@ -32,7 +33,10 @@ function extractWords(x, acc = []) {
  * For non-English speech a SECOND pass with the English model is stored as transcript.alt.json: in practice it keeps
  * English terms and numbers (Kafka, 99.99%) that the native pass drops. Best-effort — never fails the step.
  */
-export async function transcribe(video, dir, log, language = 'en') {
+// Edits transcribes in the cloud (it uploads the audio), so network blips happen. These are worth retrying.
+export const isTransient = (msg) => /network is unreachable|unreachable|offline|timed out|timeout|connection (reset|refused|lost)|uploadFailed|temporar|ECONNRESET|ENOTFOUND|\b50[234]\b/i.test(String(msg));
+
+export async function transcribe(video, dir, log, language = 'en', { attempts = 4, delayMs = 5000 } = {}) {
   const out = path.join(dir, 'transcript.json');
   if (fs.existsSync(out)) { log('♻️ transcript cached'); return JSON.parse(fs.readFileSync(out, 'utf8')); }
   log('Edits app: new project + import…');
@@ -40,10 +44,23 @@ export async function transcribe(video, dir, log, language = 'en') {
   const imp = await editsTool('importMedia', { path: video });
   const id = imp?.id ?? imp?.itemId ?? imp?.clipId ?? imp?.items?.[0]?.id ?? imp?.item?.id;
   if (!id) throw new Error('importMedia returned no id: ' + JSON.stringify(imp).slice(0, 200));
-  log(`Edits app: transcribing (${language})…`);
-  const tr = await editsTool('transcribeClip', { id, language, mergeSplitWords: true });
-  const words = extractWords(tr.words ?? tr);
-  if (!words.length) throw new Error('no words in transcript');
+  // Right after an import the app may not have the media ready (empty transcript), and the upload can hit a network blip: retry with backoff.
+  let words = [], last, lastErr;
+  for (let i = 1; i <= attempts && !words.length; i++) {
+    if (i > 1) { log(`${lastErr ? 'network error' : 'empty transcript'} — retrying in ${(delayMs * (i - 1)) / 1000}s (attempt ${i}/${attempts})…`); await new Promise((r) => setTimeout(r, delayMs * (i - 1))); }
+    log(`Edits app: transcribing (${language})…`);
+    lastErr = null;
+    try {
+      last = await editsTool('transcribeClip', { id, language, mergeSplitWords: true });
+      words = extractWords(last.words ?? last);
+    } catch (e) {
+      if (!isTransient(e.message)) throw e;
+      lastErr = e;
+      if (i === attempts) throw new Error(`Edits could not reach its transcription service (it uploads the audio) — check your internet connection, then use "Re-run from here". Last error: ${e.message.replace(/\s+/g, ' ').slice(0, 160)}`);
+    }
+  }
+  fs.writeFileSync(path.join(dir, 'transcript.raw.json'), JSON.stringify(last ?? null));
+  if (!words.length) throw new Error(`no words in transcript after ${attempts} attempts — Edits replied: ${JSON.stringify(last).slice(0, 200)}`);
   if (language !== 'en') {
     try {
       log('Edits app: second pass (en) to recover English terms…');
@@ -67,6 +84,16 @@ export function attachAlt(sents, altWords, toOut, tol = 0.3) {
     const text = altWords.filter((w) => { const t = toOut(w.start); return t >= x.t - tol && t < end - tol; }).map((w) => w.w).join(' ');
     return text ? { ...x, alt: text } : x;
   });
+}
+
+/**
+ * Which language is this transcript, judged by script? 'hi' when Devanagari dominates the letters, else 'en'.
+ * (Only Devanagari is detected today; other scripts need an explicit language.)
+ */
+export function detectLanguage(words) {
+  const txt = words.map((w) => w.w).join(' ');
+  const dev = (txt.match(/\p{Script=Devanagari}/gu) ?? []).length, lat = (txt.match(/\p{Script=Latin}/gu) ?? []).length;
+  return dev + lat > 0 && dev / (dev + lat) >= 0.4 ? 'hi' : 'en';
 }
 
 /** Cut dead air: keep speech segments (+pad), drop gaps > maxGap. Returns segments + src→out time map. */

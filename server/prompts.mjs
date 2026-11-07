@@ -138,7 +138,7 @@ export const repairPrompt = (err) => `Rendering/typecheck failed:\n${err.slice(0
 export const editSystem = `You operate the "Edits" video editor via tools. You are an EXECUTOR: every timing, level and choice is already decided in the EDL — never improvise creatively, never re-time, never pick other styles. Don't re-inspect state unless a step fails. If a step is impossible, do the closest faithful thing and note it in your final reply. Times are seconds on the composition timeline.`;
 
 export const editPrompt = ({ tight, clipsDir, edl, out, quality }) => {
-  const sc = edl.scenes.map((s) => `${s.id} | ${s.start}s +${s.dur}s | ${s.kind} | in:${s.tin} out:${s.tout} | ${clipsDir}/${s.id}.mp4`).join('\n');
+  const sc = edl.scenes.map((s) => `${s.id} | ${s.start}s +${s.dur}s | ${s.kind} | ${clipsDir}/${s.id}.mp4`).join('\n');
   const zm = edl.zooms.map((z) => `${z.start}s +${z.dur}s → ${Math.round(z.scale * 100)}% (ease in/out, centre on face)`).join('\n') || '(none)';
   const fx = edl.sfx.map((x) => `${x.at}s | ${x.name} | vol ${x.volume}`).join('\n') || '(none)';
   const m = edl.music, c = edl.captions;
@@ -148,7 +148,7 @@ export const editPrompt = ({ tight, clipsDir, edl, out, quality }) => {
 2) VOICE: enable voice enhance on the clip; normalise loudness to -14 LUFS (loudness/processAudio).
 3) CARDS (overlay layer above the video; import each mp4, place at exact start, set exact duration; MUTE card audio; never move the main clip):
 ${sc}
-   For each card add transition_in at its start and transition_out at its end using the listed filter ids (addTransition).
+   Do NOT use addTransition: it only works between ADJACENT clips on one track, so it cannot apply to overlay cards. Instead give every card a short fade in and out with setFade (0.15s each).
 4) PUNCH-INS on the talking head (transform keyframes, smooth ease; return to 100% after the hold):
 ${zm}
 5) CAPTIONS: generateCaptions (source = composition audio, language ${edl.language ?? 'en'}; do NOT enable extra auto-captions elsewhere), then setCaptionStyle "${c.style}", setCaptionHighlightColor ${c.highlightColor}, then setCaptionHighlights for these words wherever spoken: ${c.keywords.join(', ')}. Layout: 2-3 words per line (re-split if needed), as large as fits, centred horizontally with the caption block centred at ≈68% of frame height (inside the safe area: keep top 14% and bottom 20% clear). Cards deliberately leave that band empty. Highlight at most one word per line.${edl.language && edl.language !== 'en' ? ` The captions are in the SPOKEN language (${edl.language}): during QA confirm the caption style renders those glyphs correctly (no missing characters); if it does not, switch to caption style "Default" and say so in your final reply.` : ''}
@@ -157,6 +157,6 @@ ${zm}
 ${fx}
 8) GRADE: ${edl.grade?.note ?? 'subtle contrast/saturation lift'} — apply with adjust tools (no LUT/filter presets).
 9) ${quality === 'high' ? 'QA: previewVideoFrames at ~5 points (each card start, 2 captioned talking-head moments, the last second). Fix: caption overlapping card text, clipped card, any clip not at its exact time, music louder than voice. Re-check only what you changed.' : 'No QA pass.'}
-10) EXPORT: H.264, ${config.canvas.width}x${config.canvas.height}, ${config.canvas.fps}fps, high quality, to ${out}; wait until exportStatus is finished.
+10) EXPORT: H.264 if the app offers it, otherwise HEVC (do not report that as a problem); ${config.canvas.width}x${config.canvas.height}, ${config.canvas.fps}fps, high quality, to ${out}; wait until exportStatus is finished.
 Final reply (max 3 lines): exported path, plus any deviations from the EDL.`;
 };

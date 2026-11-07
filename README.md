@@ -183,6 +183,7 @@ Everything environment-specific is in [`server/config.mjs`](server/config.mjs) a
 |---|---|
 | `Edits rejected the request: set METAPILOT_TOKEN…` | Put the token from Edits → Settings → Automation into `.env.local`. |
 | Transcribe step fails / "importMedia returned no id" | Open the Edits app (home or editor screen) and make sure Automation is enabled. |
+| `Edits could not reach its transcription service` | Edits transcribes in the cloud. Check your internet connection, then **Re-run from here** (Instaedits already retries 4× with backoff). |
 | `claude exited …` / login errors | Run `claude` once in a terminal and log in. |
 | `ffprobe: command not found` | `brew install ffmpeg` |
 | First render is slow | Remotion may download a headless browser on first use; later renders are fast. |
@@ -194,17 +195,17 @@ Everything environment-specific is in [`server/config.mjs`](server/config.mjs) a
 
 ## Status & roadmap
 
-**Beta.** Direction, rule enforcement, timing resolution and rendering are covered by 90+ tests and CI. The last step — a model driving the Edits app (caption placement, music/SFX search, export) — depends on a closed-source app's tool surface and may need prompt tuning on your machine; please open an issue with the dashboard log if it misbehaves.
+**Beta.** The whole pipeline has now been run end to end — including the Edits app editing and exporting — on a synthetic Hindi test clip (11/11 steps, about $0.31). Direction, rule enforcement, timing resolution and rendering are covered by 180+ tests and CI. Real-footage testing is still ongoing, and a model driving a closed-source app may need prompt tuning on your machine; please open an issue with the dashboard log (and the *Editor's report* panel) if it misbehaves.
 
-Known limits: the Edits transcription may drop English words in Hindi speech (mitigated by the second pass, not eliminated) · macOS + Edits only · overlay cards are opaque full-frame · a repeated anchor phrase resolves to its first occurrence · the editing rules are heuristics from low-evidence sources, so measure your own retention.
+Known limits: overlay cards get fades, not transitions (the app's transition tool only works between adjacent clips) · the export may be HEVC when H.264 isn't offered · the Edits transcription may drop English words in Hindi speech (mitigated by the second pass, not eliminated) · macOS + Edits only · overlay cards are opaque full-frame · a repeated anchor phrase resolves to its first occurrence · the editing rules are heuristics from low-evidence sources, so measure your own retention.
 
 Roadmap: end-to-end verification on more real videos · occurrence-aware anchors · brand/profile theming · more card types (timeline, graph) · an HTTP workflow API for integrations. Ideas and PRs welcome.
 
 ## FAQ
 
-**Does my video get uploaded?** Your video is processed locally (ffmpeg, Remotion, the Edits app); it is hard-linked into `~/Movies/Instaedits/<job>/` so the sandboxed Edits app can open it, and the final export lands there too. Claude receives text only — transcript sentences (and their English translation), timings and the storyboard — plus a few preview frames in High mode during the quality check.
+**Does my video get uploaded?** Instaedits itself uploads nothing: ffmpeg, Remotion and the Edits app run on your Mac, and your video is hard-linked into `~/Movies/Instaedits/<job>/` so the sandboxed Edits app can open it. Two things do leave your machine: **(1) the Edits app uploads your audio to its own servers to transcribe it** (we observed this: offline, transcription fails with `uploadFailed … Network is unreachable`), so an internet connection is required and Edits' privacy policy applies; **(2) Claude receives text only** — transcript sentences (and their English translation), timings and the storyboard — plus a few preview frames in High mode during the quality check.
 
-**What does the Edits app do with my audio?** Transcription and the music/SFX libraries come from the Edits app; whether any of it happens in its cloud is governed by *its* privacy policy. Check it if your footage is sensitive.
+**What does the Edits app do with my audio?** Transcription is a cloud call made by the Edits app (see above), and its music/SFX libraries are fetched from its servers. Check Edits' privacy policy if your footage is sensitive.
 
 **How much does a run cost?** Direction + code-gen is about $0.15 for a 25-second reel (measured). The editing step is capped at $1.50 (Fast) or $3 (High); steps are cached, so re-runs are cheaper.
 
