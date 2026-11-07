@@ -139,3 +139,13 @@ test('full-screen cards: at most 2 (extra ones shown split), each ≥ 2.5 s; any
   assert.equal(byId.f1.dur, LIMITS.fullDurMin); assert.equal(byId.w.layout, undefined);
   assert.ok(notes.some((n) => /f3: more than 2 full-screen cards/.test(n)));
 });
+
+import { wordsOnCard } from '../server/guardrails.mjs';
+test('reading time: a card stays up ≥1 s per 2.5 words (min 1.8 s), lengthened with a note', () => {
+  assert.equal(wordsOnCard({ kind: 'Flow', props: { title: 'How it works', nodes: [{ label: 'Video + Script', note: 'raw clip' }, { label: 'Claude' }] } }), 9);
+  const d = base(); d.scenes = [d.scenes[0], { id: 'r', anchor: 'x', dur: 2, kind: 'Bullets', props: { title: 'What you get back', items: ['Infographics for every idea', 'Remotion videos', 'A fully edited reel'] } }];
+  const { direction, notes } = run(d);
+  const r = direction.scenes.find((s) => s.id === 'r');
+  assert.ok(r.dur >= Math.min(LIMITS.cardDurMax, wordsOnCard(r) / LIMITS.readWps) - 0.051, 'reading time, capped at the max card length');
+  assert.ok(notes.some((n) => /card r: \d+ words need/.test(n)));
+});

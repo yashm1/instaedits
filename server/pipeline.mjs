@@ -35,7 +35,7 @@ export const STEP_DEFS = (q) => [
   { key: 'transcribe', title: 'Word-level transcript (cached per video)', model: 'local (Edits captions model)' },
   { key: 'tighten', title: 'Cut dead air → tight.mp4 (cached per video)', model: 'local (ffmpeg)' },
   { key: 'translate', title: 'Translate speech → English script (non-English only)', model: config.models.translator },
-  { key: 'direction', title: 'Understand the video + creative direction (cards, screenshots, music, SFX)', model: config.models.director },
+  { key: 'direction', title: 'Director: script breakdown (promise, hook, beats, risks) → shot list', model: config.models.director },
   { key: 'assets', title: 'Fetch real tool & repo visuals (GitHub API + page screenshots)', model: 'local (GitHub API + Chrome)' },
   { key: 'resolve', title: 'Resolve anchors → exact timestamps (EDL)', model: 'local' },
   { key: 'captions', title: 'Captions from the transcript → Latin-script Hinglish lines', model: config.models.captions },
@@ -283,9 +283,21 @@ const STEPS = {
     const takesKey = keyOf('takes', fileKey(st.video));
     const previousTakes = reuse(job) ? [] : earlierTakes(job, takesKey).slice(-3);
     if (previousTakes.length) log(`🎬 new take — ${previousTakes.length} earlier take(s) of this video will not be repeated`);
+    // PASS 1 — script breakdown: understand the piece before directing it (promise, open loop, hook candidates, beats, risks)
+    log('🎬 reading the script: promise, open loop, hook options, beats, attention risks…');
+    const bd = await runClaude({
+      model: config.models.director, system: P.BREAKDOWN_SYSTEM, schema: P.BREAKDOWN_SCHEMA, effort: reuse(job) ? 'medium' : 'high',
+      prompt: P.breakdownPrompt({ sentences: sents, duration: cuts.total, language: st.language, links: st.links ?? [], terms: st.terms ?? [], screens: available }),
+      cwd: job.dir, budget: st.budgets.direction, onEvent: log, signal: job.abort.signal, cache: llmCache(job),
+    });
+    const breakdown = bd.structured ?? JSON.parse(bd.text.match(/\{[\s\S]*\}/)[0]);
+    writeJson(f(job, 'breakdown.json'), breakdown);
+    st.breakdown = { promise: breakdown.promise, open_loop: breakdown.open_loop, hook: breakdown.chosen_hook, hooks: breakdown.hooks.map((h) => h.text), payoff: `${breakdown.payoff.sentence}: ${breakdown.payoff.what}`, first_seconds: breakdown.first_seconds, risks: breakdown.risks };
+    log(`🎬 promise: ${breakdown.promise.slice(0, 120)} · hook: “${breakdown.chosen_hook}”`);
+    // PASS 2 — the shot list, built from the breakdown
     const r = await runClaude({
       model: config.models.director, system: P.DIRECTOR_SYSTEM, schema: P.DIRECTOR_SCHEMA, effort: reuse(job) ? 'medium' : 'high',
-      prompt: P.directorPrompt({ sentences: sents, duration: cuts.total, library, indexed, language: st.language, screens: available, links: st.links ?? [], terms: st.terms ?? [], previousTakes }),
+      prompt: P.directorPrompt({ sentences: sents, duration: cuts.total, library, indexed, language: st.language, screens: available, links: st.links ?? [], terms: st.terms ?? [], previousTakes, breakdown }),
       cwd: job.dir, budget: st.budgets.direction, onEvent: log, signal: job.abort.signal, cache: llmCache(job), // same speech + options → same plan, 0 tokens
     });
     const raw = r.structured ?? JSON.parse(r.text.match(/\{[\s\S]*\}/)[0]);
@@ -296,6 +308,7 @@ const STEPS = {
       const takes = (getJson('takes', takesKey) ?? []).filter((t) => t.concept !== d.concept);
       putJson('takes', takesKey, [...takes, takeOf(d)].slice(-5));
     }
+    r.cost = (r.cost ?? 0) + (bd.cost ?? 0); r.tokens = { in: (r.tokens?.in ?? 0) + (bd.tokens?.in ?? 0), out: (r.tokens?.out ?? 0) + (bd.tokens?.out ?? 0) };
     st.direction = { concept: d.concept, cards: d.scenes.length, zooms: d.zooms.length, sfx: d.sfx.length, music: `${d.music.query} @ ${d.music.volume} (ducked ${d.music.duckedVolume})` };
     log(`🎬 ${d.concept}`);
     return r;
