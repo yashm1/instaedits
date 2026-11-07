@@ -14,7 +14,7 @@ export const ZOOM_ORIGIN = {x: 0.5, y: 0.34}; // punch-ins scale around this poi
 export type Win = {start: number; end: number};
 export type Scene = {start: number; dur: number; layout?: 'split' | 'full'};
 export const heightOf = (s: Scene) => (s.layout === 'full' ? FULL_H : PANEL_H);
-export type Zoom = {start: number; dur: number; scale: number};
+export type Zoom = {start: number; dur: number; scale: number; style?: 'smooth' | 'jump'};
 
 /** Merge card windows separated by < MERGE_GAP seconds into continuous split-layout windows. */
 export function splitWindows(scenes: Scene[]): Win[] {
@@ -62,7 +62,9 @@ export function zoomAt(f: number, fps: number, zooms: Zoom[], split: number): nu
   const t = f / fps;
   let zoom = 1;
   for (const z of zooms) {
-    const k = interpolate(t, [z.start, z.start + 0.25, z.start + z.dur - 0.25, z.start + z.dur], [0, 1, 1, 0], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.inOut(Easing.cubic)});
+    // 'jump' = a jump-cut punch-in: snaps in/out over ~2 frames; 'smooth' eases over 0.25 s
+    const r = z.style === 'jump' ? 0.067 : 0.25;
+    const k = interpolate(t, [z.start, z.start + r, z.start + z.dur - r, z.start + z.dur], [0, 1, 1, 0], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.inOut(Easing.cubic)});
     zoom = Math.max(zoom, 1 + (z.scale - 1) * k * (1 - split));
   }
   return zoom;

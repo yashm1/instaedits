@@ -118,7 +118,7 @@ flowchart LR
 | 2 | Word-level transcript — **cached per video** (same clip is never uploaded twice) | Edits app (captions model) | — |
 | 3 | Cut dead air → `tight.mp4` — cached | ffmpeg | — |
 | 4 | **Translate to English** (non-English speech only), with the glossary — cached by prompt | Claude Sonnet | ✅ |
-| 5 | **Understand the video + creative direction** (also captures the Edits screenshots) — cached by prompt | Claude Opus | ✅ |
+| 5 | **Director, two passes:** (1) a *script breakdown* — topic, promise, open loop, three candidate hooks, a role for every sentence, a second-by-second plan for the first 5 s, attention risks; (2) the *shot list* built from it — cached by prompt | Claude Opus | ✅ |
 | 6 | **Fetch real visuals** for named tools / repos (verified, see above) — page screenshots reused for a day | GitHub API + headless Chrome | — |
 | 7 | Guardrails, then anchors → exact timestamps (the EDL) | local | — |
 | 8 | **Captions** straight from the transcript (exact word times) → ≤3-word Latin-script Hinglish lines — cached | Claude Sonnet | ✅ |
@@ -173,6 +173,9 @@ The prompt carries the creative doctrine ([`server/prompts.mjs`](server/prompts.
 | Rule | How it's enforced |
 |---|---|
 | The hook is the strongest frame | **Code + tests:** the opening Hook owns **frame 0** (split already open, words already visible — it is the thumbnail), ≤ 4 words, key word on an accent block, optional real-screenshot backdrop; QA checks frame 0. Choosing the strongest line is an **instruction to the director** |
+| Nothing sits still | **Code + tests:** speaker-only stretches get wide→tight framing changes (≤1.6 s apart in the first 6 s, ≤3 s after); every card reveals its content across its whole time on screen and moves with a slow push-in; cards enter/leave mid-motion in one direction |
+| Proof by 4 s | **Instruction to the director**, checked by the resolver (logged when the first proof visual starts after ~4 s) |
+| Text is readable | **Code + tests:** a card stays up ≥ 1 s per 2.5 words on it; captions appear 0.15 s before the word |
 | Don't flood the viewer with sound | **Code + tests:** ≈ 1 SFX per 6 s, ≤ 1 riser, volumes clamped |
 | Voice stays dominant | **Code + tests:** music ≤ 0.16, ducked to ≤ 0.6× |
 | Cards are watchable | **Code + tests:** 1.5–5.5 s each, never overlapping; malformed cards dropped; zooms only in card-free gaps; three-of-a-kind in a row is *flagged*, not fixed |
@@ -183,7 +186,7 @@ The prompt carries the creative doctrine ([`server/prompts.mjs`](server/prompts.
 | One hero colour | **Theme constants + WCAG contrast tests** |
 | Every card adds new information | **Instruction to the director** — reviewed by the Full-mode QA model, not enforced by code |
 
-The reasoning and its sources — including what we *didn't* trust — are in [docs/research.md](docs/research.md).
+The reasoning and its sources — including what we *didn't* trust — are in [docs/research.md](docs/research.md) and, for retention and motion quality (first 3 seconds, pacing, punch-ins, captions, easing), [docs/research-retention.md](docs/research-retention.md).
 
 ## Configuration
 

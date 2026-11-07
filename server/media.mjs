@@ -183,6 +183,40 @@ export function findAnchor(words, anchor, from = 0) {
 
 const CARD_GAP = 0.1, MIN_CARD = 1.2;
 
+export const PACE = { early: 1.6, earlyUntil: 6, later: 3.0, minSeg: 1.0, tight: 1.14 };
+/**
+ * Framing changes for speaker-only stretches (research: alternate wide/tight, hold — never zoom in and straight back
+ * out; a visual change every 1.5-3 s). Each stretch is split at word onsets into segments ≤ the limit (tighter in the
+ * first seconds); segments alternate wide → TIGHT → wide…, each TIGHT segment is a jump punch-in held to its end.
+ * A stretch = time between two visual changes (card in/out, zoom in/out). Pure; exported for tests.
+ */
+export function pacingZooms(edl, wordStarts, log = () => {}) {
+  const busy = [...edl.scenes.map((c) => [c.start, c.start + c.dur]), ...edl.zooms.map((z) => [z.start, z.start + z.dur])].sort((a, b) => a[0] - b[0]);
+  const free = []; let cur = 0;
+  for (const [a, b] of busy) { if (a > cur) free.push([cur, a]); cur = Math.max(cur, b); }
+  if (cur < edl.duration) free.push([cur, edl.duration]);
+  const out = [];
+  for (const [g0, g1] of free) {
+    const cuts = [g0]; let t = g0;
+    while (true) {
+      const limit = t < PACE.earlyUntil ? PACE.early : PACE.later;
+      if (g1 - t <= limit) break;
+      const want = t + limit * 0.85;
+      const onset = wordStarts.filter((w) => w >= t + PACE.minSeg && w <= t + limit && g1 - w >= PACE.minSeg).sort((a, b) => Math.abs(a - want) - Math.abs(b - want))[0];
+      const at = onset ?? Math.min(t + limit, g1 - PACE.minSeg);
+      if (at - t < PACE.minSeg * 0.8) break;
+      cuts.push(at); t = at;
+    }
+    cuts.push(g1);
+    for (let i = 1; i + 1 < cuts.length; i += 2) { // segments 1, 3, 5… are TIGHT (wide first: the stretch opens on the card/zoom that just ended)
+      const start = cuts[i], end = cuts[i + 1];
+      out.push({ start: +start.toFixed(2), dur: +(end - start).toFixed(2), scale: PACE.tight, style: 'jump' });
+    }
+  }
+  if (out.length) log(`⏱ pacing: ${out.length} wide→tight framing change(s) so no stretch sits unchanged (≤${PACE.early}s early, ≤${PACE.later}s later)`);
+  return out;
+}
+
 /** Index of `word` within words[i0..i1] (exact normalised match, else a ≥3-letter prefix match either way), or -1. */
 export function findWordIn(words, word, i0, i1) {
   const target = norm(String(word ?? ''));
@@ -254,6 +288,13 @@ export function buildEdl(direction, words, cuts, log, sents = null, language = '
     usedZoom.push(best.start);
     edl.zooms.push({ start: +best.start.toFixed(2), dur: z.dur, scale: z.scale });
   }
+  // PACING (the ~4 s drop): no speaker-only stretch may sit unchanged for long. Fill each with quick "jump" punch-ins on
+  // spoken words — ≤ PACE.early s apart in the first PACE.earlyUntil s, ≤ PACE.later s after. Cards perform on their own.
+  edl.zooms.push(...pacingZooms(edl, words.map((w) => cuts.toOut(w.start)), log));
+  // the promise must start paying off by ~4 s (a hook/body mismatch is the classic 3-5 s drop)
+  const proof = edl.scenes.find((c, i) => i > 0 || c.start > 0.5);
+  edl.proofAt = proof ? proof.start : null;
+  if (!proof || proof.start > 4.5) log(`⚠️ retention: the first proof visual starts at ${proof ? proof.start + 's' : 'never'} — it should start by ~4 s`);
   for (const x of direction.sfx ?? []) {
     const ref = x.on_scene ? edl.scenes.find((s) => s.was === x.on_scene) : null;
     const h = ref ? { t: x.edge === 'out' ? ref.start + ref.dur : ref.start } : at(x.anchor ?? '', 0);
@@ -263,7 +304,7 @@ export function buildEdl(direction, words, cuts, log, sents = null, language = '
   edl.sfx.sort((a, b) => a.at - b.at);
   // never stack sfx closer than 0.8s
   edl.sfx = edl.sfx.filter((s, i, a) => i === 0 || s.at - a[i - 1].at >= 0.8);
-  edl.zooms.sort((a, b) => a.start - b.start);
+  edl.zooms.sort((a, b) => a.start - b.start); // (pacing inserts included)
   edl.captions = direction.captions; edl.music = direction.music;
   return edl;
 }

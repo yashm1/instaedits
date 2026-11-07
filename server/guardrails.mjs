@@ -6,7 +6,8 @@ import { isRefKind, parseRepo } from './references.mjs';
 export const LIMITS = {
   musicMax: 0.16, duckRatio: 0.6,
   sfxMin: 0.15, sfxMax: 0.45, sfxPerSeconds: 6, sfxFloor: 2,
-  zoomMin: 1.06, zoomMax: 1.14, zoomDurMin: 0.6, zoomDurMax: 1.8,
+  zoomMin: 1.10, zoomMax: 1.18, zoomDurMin: 1.5, zoomDurMax: 4, // punch-ins 10-20 %, held (docs/research-retention.md)
+  readWps: 2.5, readMin: 1.8, // text must stay up long enough to read: ≥1 s per 2-3 words
   cardDurMin: 1.5, cardDurMax: 5.5, // split layout: the speaker stays visible, so cards may hold longer
   keywordShare: 0.1, // ≤10% of spoken words may be emphasised
   hookWordsMax: 4, maxSameKindInRow: 2,
@@ -15,6 +16,13 @@ export const LIMITS = {
 
 const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
 const isHttps = (u) => { try { return new URL(String(u)).protocol === 'https:'; } catch { return false; } };
+/** Words a viewer must read on a card (titles, labels, points, items — not code). */
+export function wordsOnCard(s) {
+  const p = s.props ?? {}, acc = [];
+  const add = (v) => { if (typeof v === 'string') acc.push(v); else if (Array.isArray(v)) v.forEach(add); else if (v && typeof v === 'object') ['label', 'title', 'note', 'text'].forEach((k) => add(v[k])), add(v.points); };
+  ['text', 'sub', 'title', 'label', 'caption', 'items'].forEach((k) => add(p[k])); add(p.nodes); add(p.steps); add(p.bars); add(p.from); add(p.to); add(p.left); add(p.right);
+  return acc.join(' ').split(/\s+/).filter(Boolean).length;
+}
 const REQUIRED = { Hook: ['text'], Title: ['text'], Flow: ['nodes'], Fanout: ['from', 'to'], Steps: ['steps'], Chart: ['bars'], Code: ['code'], Stat: ['value', 'label'], Bullets: ['items'], Compare: ['left', 'right'], Repo: ['repo'], Site: ['url'], Screen: ['shot'] };
 /** Reason string if a card lacks a prop its component needs (or a list prop is empty), else null. */
 export function missingProps(s) {
@@ -31,6 +39,8 @@ export function applyGuardrails(input, { totalSeconds, scriptWordCount, screens 
 
   // cards
   d.scenes = (d.scenes ?? []).map((s) => {
+    const need = Math.min(L.cardDurMax, Math.max(L.readMin, wordsOnCard(s) / L.readWps)); // reading time
+    if (s.dur < need) { notes.push(`card ${s.id}: ${wordsOnCard(s)} words need ${need.toFixed(1)}s to read — was ${s.dur}s`); s = { ...s, dur: +need.toFixed(1) }; }
     const dur = clamp(s.dur, L.cardDurMin, L.cardDurMax);
     if (dur !== s.dur) notes.push(`card ${s.id}: duration ${s.dur}s → ${dur}s`);
     return { ...s, dur };

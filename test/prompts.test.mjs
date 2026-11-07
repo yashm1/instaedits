@@ -21,17 +21,6 @@ test('schema requires every section the resolver reads, and has NO grade (the ca
   assert.ok(props.scenes.items.properties.word, 'cards can land on an exact spoken word');
 });
 
-test('doctrine text agrees with the enforced guardrail numbers and the split layout', () => {
-  const t = P.DIRECTOR_SYSTEM;
-  assert.match(t, /≤4 words/);
-  assert.match(t, /never >0\.16/); assert.equal(LIMITS.musicMax, 0.16);
-  assert.match(t, /108-114%/); assert.ok(LIMITS.zoomMin >= 1.06 && LIMITS.zoomMax <= 1.14);
-  assert.match(t, /cards 2-5s/); assert.ok(LIMITS.cardDurMax >= 5);
-  assert.match(t, /SPLIT/); assert.match(t, /TOP HALF/); assert.match(t, /speaker stays visible/);
-  assert.match(t, /NOVELTY/); assert.match(t, /sound OFF/);
-  assert.match(t, /FIRST understand what the video is about/);
-});
-
 test('director prompt: numbered sentences with EN lines, screenshots, creator links and glossary', () => {
   const p = P.directorPrompt({
     sentences: [{ n: 3, t: 7.25, text: 'यह तेज़ है', en: 'It is fast' }], duration: 20, library: '- `Hook`', indexed: true, language: 'hi',
@@ -49,15 +38,6 @@ test('director prompt without extras says so explicitly (no empty headings the m
   const p = P.directorPrompt({ sentences: [{ n: 1, t: 1, text: 'Hello.' }], duration: 5, library: 'L' });
   assert.match(p, /\[#1 @1\.0s\] Hello\./);
   assert.match(p, /REAL SCREENSHOTS[^\n]*\n\(none\)/); assert.match(p, /CREATOR LINKS[^\n]*\(none\)/);
-});
-
-test('doctrine: card text English, real screenshots preferred, references only when certain', () => {
-  const t = P.DIRECTOR_SYSTEM;
-  assert.match(t, /LANGUAGE: all card text is ENGLISH/);
-  assert.match(t, /SHOW THE REAL THING/); assert.match(t, /Screen card/); assert.match(t, /Site card/); assert.match(t, /github\.com\/owner\/name \(the actual repo page\)/);
-  assert.match(t, /CERTAIN/); assert.match(t, /dropped if wrong/); assert.match(t, /Up to 3 Repo\/Site cards/);
-  assert.match(t, /"this repo"/);
-  assert.match(P.DIRECTOR_SCHEMA.properties.scenes.items.properties.anchor.description, /#N/);
 });
 
 test('director must not build claims on [?] spots', () => {
@@ -121,4 +101,32 @@ test('a fresh take shows the director earlier takes and demands a different angl
   assert.match(p, /Take 1: concept "Proof-first reveal" · hook "Claude edited this" · cards: Hook: Claude edited this \| Screen/);
   assert.match(p, /Keep every fact true to the speech/);
   assert.doesNotMatch(P.directorPrompt({ sentences: [{ n: 1, t: 0, text: 'x' }], duration: 5, library: 'L' }), /PREVIOUS TAKES/, 'reuse mode: no takes section');
+});
+
+test('doctrine carries the research numbers and agrees with the enforced guardrails', () => {
+  const t = P.DIRECTOR_SYSTEM;
+  assert.match(t, /FIRST 3 SECONDS/); assert.match(t, /0\.25 s/); assert.match(t, /≤4 words/);
+  assert.match(t, /START BY 4\.0 s/, 'proof by 4 s');
+  assert.match(t, /never static >3–4 s/); assert.match(t, /cards 2–5 s/); assert.ok(LIMITS.cardDurMax >= 5);
+  assert.match(t, /110–118%/); assert.ok(LIMITS.zoomMin >= 1.1 && LIMITS.zoomMax <= 1.2);
+  assert.match(t, /never >0\.16/); assert.equal(LIMITS.musicMax, 0.16);
+  assert.match(t, /≥1 s per 2–3 words/); assert.equal(LIMITS.readWps, 2.5);
+  assert.match(t, /SPLITS the frame/); assert.match(t, /layout 'full' on 1-2 cards/);
+  assert.match(t, /SHOW, DON'T REPEAT/); assert.match(t, /https:\/\/github\.com\/owner\/name/); assert.match(t, /CERTAIN/);
+  assert.match(t, /LANGUAGE: card text is ENGLISH/); assert.match(t, /PAYOFF/); assert.match(t, /loops/);
+});
+
+test('pass 1 — the script breakdown asks what a real director would: promise, open loop, 3 hooks, beat roles, first seconds, risks', () => {
+  const t = P.BREAKDOWN_SYSTEM;
+  for (const k of ['promise', 'open_loop', 'payoff', 'hooks', 'beats', 'first_seconds', 'risks']) assert.match(t, new RegExp(k), k);
+  assert.match(t, /3 candidate opening hooks/); assert.match(t, /sound OFF/); assert.match(t, /hook\/body match/);
+  assert.deepEqual(P.BREAKDOWN_SCHEMA.properties.beats.items.properties.role.enum, ['hook', 'promise', 'proof', 'mechanism', 'payoff', 'cta']);
+  const p = P.breakdownPrompt({ sentences: [{ n: 1, t: 0.1, text: 'ओ भाई', en: 'Hey bro' }], duration: 24, language: 'hi', links: ['https://github.com/a/b'] });
+  assert.match(p, /\[#1 @0\.1s\] ओ भाई {2}\|\| {2}EN: Hey bro/); assert.match(p, /CREATOR LINKS: https:\/\/github\.com\/a\/b/);
+});
+
+test('pass 2 — the shot list is built FROM the breakdown', () => {
+  const p = P.directorPrompt({ sentences: [{ n: 1, t: 0, text: 'x' }], duration: 5, library: 'L', breakdown: { chosen_hook: 'Script in, reel out', promise: 'p' } });
+  assert.match(p, /YOUR SCRIPT BREAKDOWN/); assert.match(p, /Script in, reel out/);
+  assert.doesNotMatch(P.directorPrompt({ sentences: [{ n: 1, t: 0, text: 'x' }], duration: 5, library: 'L' }), /SCRIPT BREAKDOWN/);
 });

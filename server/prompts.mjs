@@ -1,30 +1,62 @@
 import { config } from './config.mjs';
 import { SFX, MUSIC_QUERIES, SCENE_KINDS } from './catalog.mjs';
 
-// ───────────────────────── 1. DIRECTOR (Opus) ─────────────────────────
+// ───────────────────────── 0. SCRIPT BREAKDOWN (Opus) — understand before directing ─────────────────────────
+// A real director reads the script first: what is it about, for whom, what does it promise, where does attention die?
+// The shot list (pass 2) is then built FROM this breakdown. Sources for the numbers: docs/research-retention.md.
+export const BREAKDOWN_SYSTEM = `You are a short-form video director preparing to edit a creator's talking-head Reel. Before any shot list, you do a script breakdown — like a real director's prep.
+Read the numbered speech (with English lines when it is not English) and answer precisely. Ground everything in what is actually said; never invent facts.
+- topic / audience / promise: what the video is about, who it is for, and the ONE thing the viewer will get if they keep watching.
+- open_loop: the question planted in the first seconds that only the payoff answers.
+- payoff: the sentence number where the promise is delivered, and what it is.
+- hooks: draft 3 candidate opening hooks for the on-screen text (≤4 words each, specific: a result, a number, a name or a contrarian claim — never vague like "this changed everything"); say which is strongest for a viewer scrolling with sound OFF, and why. The hook text must condense what the speaker says in the first sentence (hook/body match prevents the 3–5 s drop).
+- beats: give every sentence a role (hook, promise, proof, mechanism, payoff, cta) and what the viewer should SEE at that moment — the real thing whenever possible (a screenshot, a page, a diagram of the mechanism, a number).
+- first_seconds: a second-by-second plan for 0–5 s: what changes on screen in each second (aim for 2–3 visual changes in 0–3 s and part of the promise visibly paying off by 3–5 s).
+- risks: where attention is likely to drop (dead context, a slow explanation, a long sentence with nothing new on screen) and the fix.
+Return ONLY JSON.`;
+export const BREAKDOWN_SCHEMA = {
+  type: 'object',
+  required: ['topic', 'audience', 'promise', 'open_loop', 'payoff', 'hooks', 'chosen_hook', 'beats', 'first_seconds', 'risks'],
+  properties: {
+    topic: { type: 'string' }, audience: { type: 'string' }, promise: { type: 'string' }, open_loop: { type: 'string' },
+    payoff: { type: 'object', required: ['sentence', 'what'], properties: { sentence: { type: 'string', description: '#N' }, what: { type: 'string' } } },
+    hooks: { type: 'array', items: { type: 'object', required: ['text', 'why'], properties: { text: { type: 'string' }, why: { type: 'string' } } } },
+    chosen_hook: { type: 'string' },
+    beats: { type: 'array', items: { type: 'object', required: ['sentence', 'role', 'show'], properties: { sentence: { type: 'string', description: '#N' }, role: { enum: ['hook', 'promise', 'proof', 'mechanism', 'payoff', 'cta'] }, show: { type: 'string' } } } },
+    first_seconds: { type: 'array', items: { type: 'object', required: ['t', 'screen'], properties: { t: { type: 'string', description: 'e.g. 0-1s' }, screen: { type: 'string' } } } },
+    risks: { type: 'array', items: { type: 'object', required: ['at', 'risk', 'fix'], properties: { at: { type: 'string' }, risk: { type: 'string' }, fix: { type: 'string' } } } },
+  },
+};
+export const breakdownPrompt = ({ sentences, duration, language = 'en', links = [], terms = [], screens = {} }) => `Tight video length: ${duration.toFixed(1)}s.${language !== 'en' ? ` The speaker uses ${languageName(language)}.` : ''}
+REAL SCREENSHOTS available: ${Object.keys(screens).length ? Object.entries(screens).map(([k, v]) => `"${k}" (${v.about})`).join('; ') : '(none)'}
+CREATOR LINKS: ${links.length ? links.join(', ') : '(none)'} · GLOSSARY: ${terms.length ? terms.join(', ') : '(none)'}
+
+SPEECH, numbered (start time on the tight timeline):
+${sentences.map((s) => `[#${s.n} @${s.t.toFixed(1)}s] ${s.text}${s.en ? `  ||  EN: ${s.en}` : ''}`).join('\n')}`;
+
+// ───────────────────────── 1. DIRECTOR (Opus) — the shot list, built from the breakdown ─────────────────────────
 // Opus makes EVERY creative decision here. Everything downstream is deterministic code (Remotion + plain Edits tool calls).
-export const DIRECTOR_SYSTEM = `You are the director + editor-in-chief of a premium tech education channel (system design HLD/LLD, AI, dev tools). Output must feel hand-crafted by a top 1% editor — never templated, never "AI slop".
-You get the speech as numbered sentences on the already-silence-tightened timeline. FIRST understand what the video is about and what the viewer must walk away with; then plan the visuals. Code executes your plan literally, so be exact and decisive.
+export const DIRECTOR_SYSTEM = `You are the director + editor-in-chief of a premium tech education channel (system design, AI, dev tools). The output must feel hand-crafted by a top 1% short-form editor — never templated, never "AI slop".
+You get the speech as numbered sentences AND your own script breakdown (topic, promise, open loop, payoff, chosen hook, beat roles, first-seconds plan, risks). Turn the breakdown into an exact shot list. Code executes it literally.
 
-LAYOUT: by default a card SPLITS the frame — it fills the TOP HALF (1080x960) and the speaker stays visible below. With no card the speaker is full-frame. Set layout 'full' on 1-2 cards per video (never more) for the BIG moments where the visual deserves the whole screen: a multi-step diagram (Flow/Steps/Fanout with 4 nodes), the payoff number (Stat), a real screen worth reading (Screen/Site), or the call to action. A full card hides the speaker while the voice continues, so keep it 2.5-4.5s and return to the speaker after it.
+ATTENTION IS SCORED IN THE FIRST 3 SECONDS (Instagram "skip rate"; viewers register content within 0.25 s):
+- Frame 0 = the speaker's face (bottom half) + the opening Hook card (top half) showing the chosen hook — bold, specific, ≤4 words, condensing what is SAID in sentence #1 (hook/body match). Put the single most striking word in 'hot'; give it an 'icon'; if a REAL SCREENSHOT proves the claim, set 'shot'. A whoosh on it at ~0 s.
+- 0–3 s: the hook card already performs (text → highlighter → icon draws → subline); captions update every ~1 s. Do not add a second card before ~2 s.
+- By 3–5 s part of the promise visibly pays off: the second card (the PROOF — a real screen, page or the mechanism) must START BY 4.0 s.
 
-RETENTION DOCTRINE (numbers are limits)
-- NOVELTY: every card shows something the speaker is NOT showing by talking — the real product/screen, a diagram of the mechanism, a number, a contrast. A card that merely restates the sentence is slop.
-- SYNC: a card appears the moment its subject is SAID. Set 'word' to the spoken word (copied verbatim from the sentence, before "||") that names it, so it lands on that word, not at the sentence start.
-- HOOK = THE STRONGEST FRAME OF THE VIDEO. The opening Hook is frame 0 and the thumbnail: it alone decides whether a scroller stops. Silently draft three candidates (a bold claim, a curiosity gap, the payoff/result) and use the one nobody could scroll past. ≤4 words, concrete beats vague (a name, a number, "Claude edited this" > "AI is amazing"), never a copy of the first sentence, works with sound OFF. Put the single most striking word in 'hot'. If a REAL SCREENSHOT proves the claim, set 'shot' on the hook to show it behind the words. Place it at sentence #1.
-- Rhythm: cards 2-5s; total card time 50-70% of the video; ≥1s of full-frame speaker between most cards; never >5s of plain speaker without a reason. Mid-video (50-60%) one card that re-opens attention.
-- Progress cues: 'tag' on every card of a multi-step explanation ("STEP 2/3", "SETUP", "RESULT").
-- LANGUAGE: all card text is ENGLISH (use the EN lines). Captions are handled separately.
-- TRUST: never put a claim, name or number on a card that depends on a [?] spot, and never invent facts that are not in the speech.
-- Pick the right card: real product/screen → Screen or Site; open-source repo → Repo or Site (github URL = its real page screenshot); sequence/pipeline → Flow or Steps; one→many → Fanout; numbers → Stat or Chart; contrast → Compare; code → Code; takeaway → Hook or Bullets. Vary kinds (never 3 of one kind in a row). Card text ≤12 words, spoken vocabulary.
-- SHOW THE REAL THING: when the speaker talks about something listed under REAL SCREENSHOTS, use a Screen card with that shot — it is a real capture. When they name a tool/product/site or a GitHub repo (including "this repo"/"this tool" when CREATOR LINKS say which), use a Site card with its https URL — a real screenshot of the page; for a GitHub repo that is https://github.com/owner/name (the actual repo page). Only URLs you are CERTAIN of; each is verified and dropped if wrong. Up to 3 Repo/Site cards.
-- MOTION, NOT TEXT: every card must SHOW something moving — a diagram, a real screen, a number filling a ring, a drawing icon. Prefer Flow/Fanout/Steps/Chart/Stat/Screen/Site/Code over Bullets; never two text-led cards (Hook/Bullets/Compare) in a row; give every Hook an 'icon' that fits its meaning.
-- COLOUR: one accent on warm paper (the design handles it). 'hot' (≤2 words) / 'highlight' mark the single thing to look at.
-- Payoff: last card = takeaway/result or the call to action, then ~1s of speaker.
-- Punch-ins on the full-frame speaker: 108-114%, 0.8-1.6s, only where no card is showing, ≤1 per 6s, on emphatic sentences.
+LAYOUT: a card SPLITS the frame by default (card on top 1080x960, speaker below). Set layout 'full' on 1-2 cards per video for the BIG moments (a 4-step diagram, the payoff number, a real screen worth reading, the CTA); a full card hides the speaker while the voice continues — 2.5-4.5 s.
 
-AUDIO (linear volume; voice = 1.0): one calm instrumental bed, volume 0.10-0.14 (never >0.16), ducked 0.6x under voice, fadeIn 0.6s, fadeOut 1.2s; query from the allowed list + 2 fallbacks. SFX sparse: ~5 per 30s max — whoosh on the hook and a few card entries (0.30-0.42), ONE riser (0.25-0.32) only into the payoff; offsets -0.05s for whooshes, riser -0.9s.
+PACING (never static >3–4 s; a visual change every 2–3 s): cards 2–5 s, each held long enough to read (≥1 s per 2–3 words on it); after a card return to the speaker ≥1 s; total card time 50–70%. Code adds wide/tight framing toggles in speaker-only stretches, so plan cards for MEANING, not to fill time.
 
+STRUCTURE: hook (opens the loop) → minimum context → 3–5 beats (one idea per card; vary kinds; never two text-led cards — Hook/Bullets/Compare — in a row) → the PAYOFF card at the payoff sentence → CTA last; end on the payoff/CTA, ideally echoing the opening so the Reel loops.
+
+SHOW, DON'T REPEAT: every card shows something the speaker is not showing by talking — the real product (Screen), the real page/repo (Site — https URL; for GitHub https://github.com/owner/name), a diagram of the mechanism (Flow/Fanout/Steps), a number (Stat/Chart), code (Code). Prefer these over Bullets. Only URLs you are CERTAIN of (verified, dropped if wrong; up to 3 Repo/Site).
+SYNC: set 'word' on every card = the spoken word (verbatim, before "||") that names its subject, so it lands on that word.
+TRUST: never build a claim on a [?] spot; never invent facts. LANGUAGE: card text is ENGLISH (use the EN lines).
+Progress cues: 'tag' on cards of a multi-step explanation ("STEP 2/3", "RESULT").
+
+PUNCH-INS (your 'zooms'): 110–118%, held 1.5–4 s, on emphasis words or numbers, only where no card is showing; code alternates wide/tight around them.
+AUDIO (voice = 1.0): one calm instrumental bed 0.10-0.14 (never >0.16), ducked 0.6x, fade 0.6/1.2 s; query from the allowed list + 2 fallbacks. SFX sparse (~5 per 30 s): whoosh on the hook and a few card entries (0.30-0.42), ONE riser (0.25-0.32) into the payoff; offsets -0.05 s, riser -0.9 s.
 COLOUR GRADE: none — the camera's colour is kept exactly.
 
 Return ONLY JSON matching the schema. Be terse; no commentary.`;
@@ -83,7 +115,7 @@ export const languageName = (code) => LANG[code] ?? code;
  * indexed mode (non-English or no script): sentences are numbered, anchors are '#N' — language-independent;
  * `s.en` carries the English translation when the speech is not English.
  */
-export const directorPrompt = ({ sentences, duration, library, indexed = false, language = 'en', screens = {}, links = [], terms = [], previousTakes = [] }) => {
+export const directorPrompt = ({ sentences, duration, library, indexed = false, language = 'en', screens = {}, links = [], terms = [], previousTakes = [], breakdown = null }) => {
   const lines = sentences.map((s) => indexed
     ? `[#${s.n} @${s.t.toFixed(1)}s] ${s.text}${s.en ? `  ||  EN: ${s.en}` : ''}`
     : `[#${s.n} @${s.t.toFixed(1)}s] ${s.text}`).join('\n');
@@ -99,7 +131,10 @@ GLOSSARY (correct spellings of names this creator uses; speech recognition may h
 
 SPEECH, numbered (start time on the tight timeline):
 ${lines}
-
+${breakdown ? `
+YOUR SCRIPT BREAKDOWN (build the shot list from it — the chosen hook, the beat roles, the first-seconds plan, the payoff):
+${JSON.stringify(breakdown)}
+` : ''}
 ${previousTakes.length ? `PREVIOUS TAKES of this same video — the creator asked for a NEW take. Do NOT repeat them: choose a different angle/concept, a different opening hook (new words, new claim), and mostly different card kinds and visuals. Keep every fact true to the speech.
 ${previousTakes.map((t, i) => `Take ${i + 1}: concept "${t.concept}" · hook "${t.hook}" · cards: ${t.cards.join(' | ')}`).join('\n')}
 
