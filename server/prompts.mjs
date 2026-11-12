@@ -55,6 +55,8 @@ SYNC: set 'word' on every card = the spoken word (verbatim, before "||") that na
 TRUST: never build a claim on a [?] spot; never invent facts. LANGUAGE: card text is ENGLISH (use the EN lines).
 Progress cues: 'tag' on cards of a multi-step explanation ("STEP 2/3", "RESULT").
 
+EFFECTS (only if an EFFECTS list is in the brief): face-tracked effects ON the speaker's footage — a word BEHIND their head, a spotlight, a tape label, a comment box, a Follow tap, a checklist under the chin. They are the best pattern interrupt for full-frame speaker stretches: 1-4 per video, 1.5-4 s each, ONLY where no card is showing, landing on the spoken word ('word'); any text must ECHO what is said (≤1-3 words for words behind the head). Use the CTA effects (comment-box, tap) at the call to action. Never on top of a card.
+
 PUNCH-INS (your 'zooms'): 110–118%, held 1.5–4 s, on emphasis words or numbers, only where no card is showing; code alternates wide/tight around them.
 AUDIO (voice = 1.0): one calm instrumental bed 0.10-0.14 (never >0.16), ducked 0.6x, fade 0.6/1.2 s; query from the allowed list + 2 fallbacks. SFX sparse (~5 per 30 s): whoosh on the hook and a few card entries (0.30-0.42), ONE riser (0.25-0.32) into the payoff; offsets -0.05 s, riser -0.9 s.
 COLOUR GRADE: none — the camera's colour is kept exactly.
@@ -81,6 +83,14 @@ export const DIRECTOR_SCHEMA = {
           props: { type: 'object', description: 'Props for the kind — see library' },
         },
       },
+    },
+    effects: {
+      type: 'array', description: 'face-tracked effects on the speaker (only when EFFECTS are listed in the brief)',
+      items: { type: 'object', required: ['fx', 'anchor', 'dur'], properties: {
+        fx: { type: 'string', description: 'an effect name from the EFFECTS list' }, anchor: { type: 'string', description: '#N' },
+        word: { type: 'string', description: 'the spoken word it lands on (verbatim)' }, dur: { type: 'number' },
+        text: { type: 'string', description: 'per the effect; must echo what is said' }, opts: { type: 'object', description: 'e.g. {"color":"#c2410c"} or {"to":"10x"}' },
+      } },
     },
     zooms: { type: 'array', items: { type: 'object', required: ['anchor', 'dur', 'scale'], properties: { anchor: { type: 'string' }, dur: { type: 'number' }, scale: { type: 'number', description: '1.08-1.14' } } } },
     sfx: {
@@ -115,7 +125,7 @@ export const languageName = (code) => LANG[code] ?? code;
  * indexed mode (non-English or no script): sentences are numbered, anchors are '#N' — language-independent;
  * `s.en` carries the English translation when the speech is not English.
  */
-export const directorPrompt = ({ sentences, duration, library, indexed = false, language = 'en', screens = {}, links = [], terms = [], previousTakes = [], breakdown = null }) => {
+export const directorPrompt = ({ sentences, duration, library, indexed = false, language = 'en', screens = {}, links = [], terms = [], previousTakes = [], breakdown = null, effects = null }) => {
   const lines = sentences.map((s) => indexed
     ? `[#${s.n} @${s.t.toFixed(1)}s] ${s.text}${s.en ? `  ||  EN: ${s.en}` : ''}`
     : `[#${s.n} @${s.t.toFixed(1)}s] ${s.text}`).join('\n');
@@ -126,7 +136,7 @@ ${library}
 
 REAL SCREENSHOTS available for Screen cards:
 ${shots || '(none)'}
-CREATOR LINKS (what "this repo"/"this tool" refers to): ${links.length ? links.join(', ') : '(none)'}
+${effects ? `EFFECTS available (face-tracked, on the speaker; name — what it does — text):\n${Object.entries(effects).map(([k, v]) => `- ${k} — ${v.about}${v.text ? ` — text: ${v.text}` : ''}`).join('\n')}\n` : ''}CREATOR LINKS (what "this repo"/"this tool" refers to): ${links.length ? links.join(', ') : '(none)'}
 GLOSSARY (correct spellings of names this creator uses; speech recognition may have misheard them): ${terms.length ? terms.join(', ') : '(none)'}
 
 SPEECH, numbered (start time on the tight timeline):
