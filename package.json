@@ -8,7 +8,8 @@
     "start": "node server/index.mjs",
     "test": "node --import ./test/setup.mjs --test \"test/*.test.mjs\"",
     "setup": "cd remotion && npm install",
-    "screens": "node server/screens-cli.mjs"
+    "screens": "node server/screens-cli.mjs",
+    "effects:install": "bash scripts/install-effects.sh"
   },
   "engines": {
     "node": ">=22.18"

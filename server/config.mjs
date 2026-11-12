@@ -41,6 +41,8 @@ export const config = {
   cacheDir: env.INSTAEDITS_CACHE_DIR || path.join(ROOT, 'cache'),
   cacheEnabled: () => env.INSTAEDITS_CACHE !== 'off', // INSTAEDITS_CACHE=off forces every step to recompute
   cacheMaxBytes: Number(env.INSTAEDITS_CACHE_MAX_GB || 8) * 1e9, // big renders are pruned least-recently-used beyond this
+  // Optional face-tracked effects pack (npm run effects:install → vendor/, gitignored)
+  effectsDir: env.INSTAEDITS_EFFECTS_DIR || path.join(ROOT, 'vendor', 'claude-video-effects'),
   jobsDir: env.INSTAEDITS_JOBS_DIR || path.join(ROOT, 'jobs'),
   remotionDir: path.join(ROOT, 'remotion'),
   canvas: { width: 1080, height: 1920, fps: 30 },

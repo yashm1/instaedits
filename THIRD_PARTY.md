@@ -13,3 +13,10 @@ This repository is MIT-licensed. It **does not bundle or redistribute** any of t
 | Edits desktop app (+ its music/SFX libraries) | transcription, assembly, export | Proprietary third-party app, **unofficial integration**; its media libraries are used inside the app and never copied into this repo |
 
 "Claude", "Remotion", "Edits" and "Instagram" are trademarks of their respective owners. This project is not affiliated with or endorsed by them.
+
+## claude-video-effects (optional)
+Face-tracked effects on the speaker's footage, by Vibha Ramprakash — https://github.com/Vibha-Ramprakash/claude-video-effects
+(MIT). Not bundled: `npm run effects:install` clones it at a reviewed commit into `vendor/` (gitignored). Its models keep
+their licences (OpenCV YuNet — MIT; MediaPipe Selfie Segmenter — Apache-2.0) and its fonts theirs (SIL OFL / Apache-2.0).
+Instaedits uses its renderer (`scripts/fx.py`) only; its Whisper-based `words.py` is not used (word timing comes from the
+Edits transcript).

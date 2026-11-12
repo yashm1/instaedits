@@ -55,7 +55,7 @@ export function judge({ finalDur, reelDur, satFinal, satReel, cards, fidelity = 
  * Check the final reel: length vs the original, the speaker's colour vs the ORIGINAL camera footage, a black-and-white
  * guard on the speaker area, and every card actually on screen at its time (vs the graphics layer). Writes qa/contact.jpg.
  */
-export async function checkExport({ final, overlay = null, scenes, dir, original, track = null }) {
+export async function checkExport({ final, overlay = null, scenes, dir, original, track = null, exclude = [] }) {
   const qd = path.join(dir, 'qa'); fs.rmSync(qd, { recursive: true, force: true }); fs.mkdirSync(qd, { recursive: true });
   const [finalDur, reelDur] = await Promise.all([duration(final), duration(original)]);
   // speaker area (bottom strip, below the captions) — present in both layouts
@@ -88,7 +88,8 @@ export async function checkExport({ final, overlay = null, scenes, dir, original
   // colour fidelity: the export vs the ORIGINAL camera footage where the speaker is full-frame and untouched
   let fidelity = null;
   if (original && track?.length) {
-    const wins = cleanWindows(track);
+    // effect windows deliberately change the speaker's pixels: they are not colour-fidelity samples
+    const wins = cleanWindows(track.map((p, i) => (exclude.some(([a, b]) => i / 30 >= a && i / 30 <= b) ? { ...p, y: -1 } : p)));
     if (wins.length) {
       const samples = await Promise.all(wins.map(async (w) => {
         const [a, b] = await Promise.all([meanRGB(final, w.t, w.d), meanRGB(original, w.t, w.d)]);
