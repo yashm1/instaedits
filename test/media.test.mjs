@@ -190,7 +190,7 @@ test('"#N" anchors work for zooms and sfx too; unknown sentence numbers are drop
   const e = buildEdl(d, HI, c, (m) => logs.push(m), sents, 'hi');
   assert.equal(e.scenes.length, 1);
   assert.ok(logs.some((l) => /#99/.test(l)));
-  assert.equal(e.zooms.length, 1);
+  assert.equal(e.zooms.filter((z) => z.style !== 'jump').length, 1, 'the director\'s zoom (pacing inserts are separate)');
   assert.equal(e.sfx.length, 1);
   assert.ok(Math.abs(e.sfx[0].at - (sents[4].t - 0.05)) < 0.011);
 });
@@ -314,3 +314,5 @@ test('buildEdl carries a full-screen layout to the EDL (and nothing for split ca
   const e = buildEdl(dir2([{ anchor: '#2' }, { anchor: '#4', layout: 'full' }]), HI, c, () => {}, sents, 'hi');
   assert.equal(e.scenes[0].layout, undefined); assert.equal(e.scenes[1].layout, 'full');
 });
+
+import { pacingZooms, PACE } from '../server/media.mjs';

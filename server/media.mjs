@@ -183,6 +183,60 @@ export function findAnchor(words, anchor, from = 0) {
 
 const CARD_GAP = 0.1, MIN_CARD = 1.2;
 
+/**
+ * Where an effect fits: as close to `want` as possible (±`reach` s), inside a free gap (outside `busy` intervals), as long
+ * as `dur` if the gap allows, never shorter than `min`. Returns [start, end] or null. Pure; exported for tests.
+ */
+export function fxSlot(want, dur, total, busy, { reach = 1.5, min = 1.5 } = {}) {
+  const b = [...busy].sort((x, y) => x[0] - y[0]);
+  const free = []; let cur = 0;
+  for (const [x, y] of b) { if (x > cur) free.push([cur, x]); cur = Math.max(cur, y); }
+  if (cur < total) free.push([cur, total]);
+  let best = null;
+  for (const [g0, g1] of free) {
+    if (g1 - g0 < min) continue;
+    const len = Math.min(dur, g1 - g0);
+    const start = Math.min(Math.max(want, g0), g1 - len);
+    const dist = Math.abs(start - want);
+    if (dist <= reach && (!best || dist < best.dist)) best = { start, end: start + len, dist };
+  }
+  return best ? [best.start, best.end] : null;
+}
+
+export const PACE = { early: 1.6, earlyUntil: 6, later: 3.0, minSeg: 1.0, tight: 1.14 };
+/**
+ * Framing changes for speaker-only stretches (research: alternate wide/tight, hold — never zoom in and straight back
+ * out; a visual change every 1.5-3 s). Each stretch is split at word onsets into segments ≤ the limit (tighter in the
+ * first seconds); segments alternate wide → TIGHT → wide…, each TIGHT segment is a jump punch-in held to its end.
+ * A stretch = time between two visual changes (card in/out, zoom in/out). Pure; exported for tests.
+ */
+export function pacingZooms(edl, wordStarts, log = () => {}) {
+  const busy = [...edl.scenes.map((c) => [c.start, c.start + c.dur]), ...edl.zooms.map((z) => [z.start, z.start + z.dur]), ...(edl.effects ?? []).map((e) => [e.start, e.end])].sort((a, b) => a[0] - b[0]);
+  const free = []; let cur = 0;
+  for (const [a, b] of busy) { if (a > cur) free.push([cur, a]); cur = Math.max(cur, b); }
+  if (cur < edl.duration) free.push([cur, edl.duration]);
+  const out = [];
+  for (const [g0, g1] of free) {
+    const cuts = [g0]; let t = g0;
+    while (true) {
+      const limit = t < PACE.earlyUntil ? PACE.early : PACE.later;
+      if (g1 - t <= limit) break;
+      const want = t + limit * 0.85;
+      const onset = wordStarts.filter((w) => w >= t + PACE.minSeg && w <= t + limit && g1 - w >= PACE.minSeg).sort((a, b) => Math.abs(a - want) - Math.abs(b - want))[0];
+      const at = onset ?? Math.min(t + limit, g1 - PACE.minSeg);
+      if (at - t < PACE.minSeg * 0.8) break;
+      cuts.push(at); t = at;
+    }
+    cuts.push(g1);
+    for (let i = 1; i + 1 < cuts.length; i += 2) { // segments 1, 3, 5… are TIGHT (wide first: the stretch opens on the card/zoom that just ended)
+      const start = cuts[i], end = cuts[i + 1];
+      out.push({ start: +start.toFixed(2), dur: +(end - start).toFixed(2), scale: PACE.tight, style: 'jump' });
+    }
+  }
+  if (out.length) log(`⏱ pacing: ${out.length} wide→tight framing change(s) so no stretch sits unchanged (≤${PACE.early}s early, ≤${PACE.later}s later)`);
+  return out;
+}
+
 /** Index of `word` within words[i0..i1] (exact normalised match, else a ≥3-letter prefix match either way), or -1. */
 export function findWordIn(words, word, i0, i1) {
   const target = norm(String(word ?? ''));
@@ -218,7 +272,7 @@ export function buildEdl(direction, words, cuts, log, sents = null, language = '
     scenes.push({ ...s, t: hit.t });
   }
   scenes.sort((a, b) => a.t - b.t);
-  const edl = { duration: cuts.total, language, scenes: [], zooms: [], sfx: [] };
+  const edl = { duration: cuts.total, language, scenes: [], zooms: [], sfx: [], effects: [] };
   scenes.forEach((s, idx) => {
     // opening Hook lands on the very first frames (silent-test: premise readable with sound off)
     // the split layout takes ~0.35 s to open: lead by 0.2 s so the card is readable as the word is said
@@ -236,9 +290,19 @@ export function buildEdl(direction, words, cuts, log, sents = null, language = '
     edl.scenes.push({ id: `s${edl.scenes.length + 1}`, was: s.id, anchor: s.anchor, ...(s.word ? { word: s.word } : {}), start: +start.toFixed(2), dur: +dur.toFixed(2), kind: s.kind, props: opening ? { ...s.props, opening: true } : s.props, ...(s.layout === 'full' ? { layout: 'full' } : {}) });
     prevEnd = start + dur;
   });
+  // Face-tracked effects: on the spoken word, only where the speaker is full-frame (never under a card), never overlapping.
+  for (const e of direction.effects ?? []) {
+    const h = at(e.anchor, 0, e.word); if (!h) { log(`⚠️ effect ${e.fx}: anchor not found — dropped`); continue; }
+    const want = Math.max(0, h.t - 0.1);
+    const slot = fxSlot(want, e.dur, cuts.total, [...edl.scenes.map((c) => [c.start - 0.3, c.start + c.dur + 0.3]), ...edl.effects.map((x) => [x.start, x.end])]);
+    if (!slot) { log(`⚠️ effect ${e.fx} near ${want.toFixed(1)}s: no free speaker-only gap within ±1.5 s — dropped`); continue; }
+    if (Math.abs(slot[0] - want) > 0.05) log(`↔ effect ${e.fx} moved ${want.toFixed(1)}s → ${slot[0].toFixed(1)}s (clear of cards/effects)`);
+    edl.effects.push({ fx: e.fx, start: +slot[0].toFixed(2), end: +slot[1].toFixed(2), ...(e.text ? { text: e.text } : {}), ...(e.opts ? { opts: e.opts } : {}) });
+  }
+  edl.effects.sort((a, b) => a.start - b.start);
   // Zooms live only in talking-head gaps between cards. Snap to the nearest gap that fits, else drop.
   const gaps = []; let cursor = 0;
-  for (const c of edl.scenes) { gaps.push([cursor + 0.2, c.start - 0.2]); cursor = c.start + c.dur; }
+  for (const c of [...edl.scenes.map((x) => ({ start: x.start, dur: x.dur })), ...edl.effects.map((x) => ({ start: x.start, dur: x.end - x.start }))].sort((a, b) => a.start - b.start)) { gaps.push([cursor + 0.2, c.start - 0.2]); cursor = Math.max(cursor, c.start + c.dur); }
   gaps.push([cursor + 0.2, cuts.total - 0.2]);
   const usedZoom = [];
   for (const z of direction.zooms ?? []) {
@@ -254,6 +318,13 @@ export function buildEdl(direction, words, cuts, log, sents = null, language = '
     usedZoom.push(best.start);
     edl.zooms.push({ start: +best.start.toFixed(2), dur: z.dur, scale: z.scale });
   }
+  // PACING (the ~4 s drop): no speaker-only stretch may sit unchanged for long. Fill each with quick "jump" punch-ins on
+  // spoken words — ≤ PACE.early s apart in the first PACE.earlyUntil s, ≤ PACE.later s after. Cards perform on their own.
+  edl.zooms.push(...pacingZooms(edl, words.map((w) => cuts.toOut(w.start)), log));
+  // the promise must start paying off by ~4 s (a hook/body mismatch is the classic 3-5 s drop)
+  const proof = edl.scenes.find((c, i) => i > 0 || c.start > 0.5);
+  edl.proofAt = proof ? proof.start : null;
+  if (!proof || proof.start > 4.5) log(`⚠️ retention: the first proof visual starts at ${proof ? proof.start + 's' : 'never'} — it should start by ~4 s`);
   for (const x of direction.sfx ?? []) {
     const ref = x.on_scene ? edl.scenes.find((s) => s.was === x.on_scene) : null;
     const h = ref ? { t: x.edge === 'out' ? ref.start + ref.dur : ref.start } : at(x.anchor ?? '', 0);
@@ -263,7 +334,7 @@ export function buildEdl(direction, words, cuts, log, sents = null, language = '
   edl.sfx.sort((a, b) => a.at - b.at);
   // never stack sfx closer than 0.8s
   edl.sfx = edl.sfx.filter((s, i, a) => i === 0 || s.at - a[i - 1].at >= 0.8);
-  edl.zooms.sort((a, b) => a.start - b.start);
+  edl.zooms.sort((a, b) => a.start - b.start); // (pacing inserts included)
   edl.captions = direction.captions; edl.music = direction.music;
   return edl;
 }

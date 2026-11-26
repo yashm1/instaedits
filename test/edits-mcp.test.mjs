@@ -50,3 +50,17 @@ test('editsAuthHeaders is empty without a token', () => {
   const t = process.env.METAPILOT_TOKEN; delete process.env.METAPILOT_TOKEN;
   assert.deepEqual(mod.editsAuthHeaders(), {}); process.env.METAPILOT_TOKEN = t;
 });
+
+test('a dropped connection gets a fresh session and a retry (the Edits app restarted mid-run)', async () => {
+  assert.ok(mod.isConnectionError(new Error('fetch failed')));
+  assert.ok(mod.isConnectionError(Object.assign(new Error('x'), { cause: { code: 'ECONNREFUSED' } })));
+  assert.ok(!mod.isConnectionError(new Error('bad: boom')), 'a tool error is not retried');
+  const realFetch = globalThis.fetch; let n = 0;
+  globalThis.fetch = async (...a) => { if (n++ === 0) throw new TypeError('fetch failed'); return realFetch(...a); };
+  try {
+    const before = calls.length;
+    const r = await mod.tool('afterDrop', { k: 1 }, { delayMs: 1 });
+    assert.deepEqual(r, { echo: { k: 1 }, ok: true });
+    assert.ok(calls.slice(before).some((c) => c.msg.method === 'initialize'), 're-initialised a new session');
+  } finally { globalThis.fetch = realFetch; }
+});

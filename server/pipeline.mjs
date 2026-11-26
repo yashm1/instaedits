@@ -17,6 +17,7 @@ import { keyOf, fileKey, treeKey, getJson, putJson, restoreFile, storeFile, prun
 import { runEdit } from './editor.mjs';
 import { checkExport } from './qa.mjs';
 import { writeGraph, compositeArgs } from './composite.mjs';
+import { FX_CATALOG, FX_COMMIT, fxInstalled, fxSegments, fxPython, fxScript, fxZone } from './effects.mjs';
 
 const REMOTION = config.remotionDir;
 // Bump when HOW a step produces its output changes, so old cache entries are not reused.
@@ -35,12 +36,13 @@ export const STEP_DEFS = (q) => [
   { key: 'transcribe', title: 'Word-level transcript (cached per video)', model: 'local (Edits captions model)' },
   { key: 'tighten', title: 'Cut dead air → tight.mp4 (cached per video)', model: 'local (ffmpeg)' },
   { key: 'translate', title: 'Translate speech → English script (non-English only)', model: config.models.translator },
-  { key: 'direction', title: 'Understand the video + creative direction (cards, screenshots, music, SFX)', model: config.models.director },
+  { key: 'direction', title: 'Director: script breakdown (promise, hook, beats, risks) → shot list', model: config.models.director },
   { key: 'assets', title: 'Fetch real tool & repo visuals (GitHub API + page screenshots)', model: 'local (GitHub API + Chrome)' },
   { key: 'resolve', title: 'Resolve anchors → exact timestamps (EDL)', model: 'local' },
   { key: 'captions', title: 'Captions from the transcript → Latin-script Hinglish lines', model: config.models.captions },
   { key: 'audio', title: 'Edits app: licensed music, SFX, voice enhance → audio mix', model: 'local (Edits tool calls)', group: 'produce' },
   { key: 'graphics', title: 'Render graphics + captions (Remotion, transparent)', model: 'local (Remotion)', group: 'produce' },
+  { key: 'effects', title: 'Face-tracked effects on the speaker (optional pack)', model: 'local (OpenCV + MediaPipe)', group: 'produce' },
   { key: 'composite', title: 'Composite over your ORIGINAL footage (ffmpeg, colour untouched)', model: 'local (ffmpeg)' },
   { key: 'verify', title: q === 'high' ? 'QA: check the final reel + watch it before publishing' : 'QA: check the final reel', model: q === 'high' ? `local (ffmpeg) + ${config.models.reviewer}` : 'local (ffmpeg)' },
 ];
@@ -283,19 +285,32 @@ const STEPS = {
     const takesKey = keyOf('takes', fileKey(st.video));
     const previousTakes = reuse(job) ? [] : earlierTakes(job, takesKey).slice(-3);
     if (previousTakes.length) log(`🎬 new take — ${previousTakes.length} earlier take(s) of this video will not be repeated`);
+    // PASS 1 — script breakdown: understand the piece before directing it (promise, open loop, hook candidates, beats, risks)
+    log('🎬 reading the script: promise, open loop, hook options, beats, attention risks…');
+    const bd = await runClaude({
+      model: config.models.director, system: P.BREAKDOWN_SYSTEM, schema: P.BREAKDOWN_SCHEMA, effort: reuse(job) ? 'medium' : 'high',
+      prompt: P.breakdownPrompt({ sentences: sents, duration: cuts.total, language: st.language, links: st.links ?? [], terms: st.terms ?? [], screens: available }),
+      cwd: job.dir, budget: st.budgets.direction, onEvent: log, signal: job.abort.signal, cache: llmCache(job),
+    });
+    const breakdown = bd.structured ?? JSON.parse(bd.text.match(/\{[\s\S]*\}/)[0]);
+    writeJson(f(job, 'breakdown.json'), breakdown);
+    st.breakdown = { promise: breakdown.promise, open_loop: breakdown.open_loop, hook: breakdown.chosen_hook, hooks: breakdown.hooks.map((h) => h.text), payoff: `${breakdown.payoff.sentence}: ${breakdown.payoff.what}`, first_seconds: breakdown.first_seconds, risks: breakdown.risks };
+    log(`🎬 promise: ${breakdown.promise.slice(0, 120)} · hook: “${breakdown.chosen_hook}”`);
+    // PASS 2 — the shot list, built from the breakdown
     const r = await runClaude({
       model: config.models.director, system: P.DIRECTOR_SYSTEM, schema: P.DIRECTOR_SCHEMA, effort: reuse(job) ? 'medium' : 'high',
-      prompt: P.directorPrompt({ sentences: sents, duration: cuts.total, library, indexed, language: st.language, screens: available, links: st.links ?? [], terms: st.terms ?? [], previousTakes }),
+      prompt: P.directorPrompt({ sentences: sents, duration: cuts.total, library, indexed, language: st.language, screens: available, links: st.links ?? [], terms: st.terms ?? [], previousTakes, breakdown, effects: fxInstalled() ? FX_CATALOG : null }),
       cwd: job.dir, budget: st.budgets.direction, onEvent: log, signal: job.abort.signal, cache: llmCache(job), // same speech + options → same plan, 0 tokens
     });
     const raw = r.structured ?? JSON.parse(r.text.match(/\{[\s\S]*\}/)[0]);
-    const { direction: d, notes } = applyGuardrails(raw, { totalSeconds: cuts.total, scriptWordCount: words.length, screens: available });
+    const { direction: d, notes } = applyGuardrails(raw, { totalSeconds: cuts.total, scriptWordCount: words.length, screens: available, effectsAvailable: fxInstalled() });
     notes.forEach((n) => log(`🛡 ${n}`));
     writeJson(f(job, 'direction.json'), d);
     if (!r.cached) { // remember this take, so a later "Start fresh" can move away from it
       const takes = (getJson('takes', takesKey) ?? []).filter((t) => t.concept !== d.concept);
       putJson('takes', takesKey, [...takes, takeOf(d)].slice(-5));
     }
+    r.cost = (r.cost ?? 0) + (bd.cost ?? 0); r.tokens = { in: (r.tokens?.in ?? 0) + (bd.tokens?.in ?? 0), out: (r.tokens?.out ?? 0) + (bd.tokens?.out ?? 0) };
     st.direction = { concept: d.concept, cards: d.scenes.length, zooms: d.zooms.length, sfx: d.sfx.length, music: `${d.music.query} @ ${d.music.volume} (ducked ${d.music.duckedVolume})` };
     log(`🎬 ${d.concept}`);
     return r;
@@ -401,19 +416,49 @@ const STEPS = {
     prune('overlay', config.cacheMaxBytes * 0.7);
   },
 
+  async effects(job, step, log) {
+    const edl = JSON.parse(fs.readFileSync(f(job, 'edl.json'), 'utf8'));
+    fs.rmSync(f(job, 'fx'), { recursive: true, force: true });
+    if (!edl.effects?.length) return { skipped: 'no effects in the plan' };
+    if (!fxInstalled()) return { skipped: 'effects pack not installed (npm run effects:install)' };
+    fs.mkdirSync(f(job, 'fx'));
+    const [w, h] = String(job.state.resolution).split('x').map(Number);
+    const width = Math.min(w || 1080, h || 1920); // its --width is the SHORT side: render at the camera's own size
+    const segs = fxSegments(edl.effects, edl.duration);
+    const done = [];
+    for (const [i, sg] of segs.entries()) {
+      const out = f(job, 'fx', `seg${i}.mp4`);
+      const key = keyOf('fx', fileKey(f(job, 'tight.mp4')), sg.offset, sg.length, sg.plan, width, FX_COMMIT);
+      if (!fromCache(job, () => restoreFile('fx', key, '.mp4', out))) {
+        // only a short near-lossless slice around the effect goes through the (per-frame, Python) renderer
+        const src = f(job, 'fx', `src${i}.mp4`);
+        await sh('ffmpeg', ['-y', '-loglevel', 'error', '-ss', String(sg.offset), '-t', String(sg.length), '-i', f(job, 'tight.mp4'), '-c:v', 'libx264', '-crf', '8', '-preset', 'veryfast', '-an', src], job.dir, () => {}, job.abort.signal);
+        writeJson(f(job, 'fx', `plan${i}.json`), sg.plan);
+        log(`✨ ${sg.plan.effects.map((e) => e.fx).join(' + ')} @ ${sg.offset.toFixed(1)}s (${sg.length.toFixed(1)}s slice)…`);
+        await sh(fxPython(), [fxScript(), '--plan', f(job, 'fx', `plan${i}.json`), src, out, '--width', String(width)], job.dir, () => {}, job.abort.signal);
+        storeFile('fx', key, '.mp4', out);
+        fs.rmSync(src, { force: true });
+      } else log(`♻️ ${sg.plan.effects.map((e) => e.fx).join(' + ')} reused`);
+      done.push({ file: out, offset: sg.offset, windows: sg.windows });
+    }
+    writeJson(f(job, 'fx', 'segments.json'), done);
+    log(`✨ ${edl.effects.length} effect(s) ready`);
+  },
+
   async composite(job, step, log) {
     const stage = stagingFor(job.id); fs.mkdirSync(stage, { recursive: true });
     const out = path.join(stage, 'final.mp4');
     const audio = !job.state.dryRun && fs.existsSync(f(job, 'audio.m4a')) ? f(job, 'audio.m4a') : null;
     const { track } = JSON.parse(fs.readFileSync(f(job, 'track.json'), 'utf8'));
     const hq = !reuse(job); // a fresh take also gets the higher-quality encode
-    const key = keyOf('final', fileKey(f(job, 'tight.mp4')), job.state.overlayKey ?? fileKey(f(job, 'overlay.mov')), audio ? fileKey(audio) : 'camera', track, COMPOSITE_RECIPE, hq);
+    const fx = fs.existsSync(f(job, 'fx', 'segments.json')) ? JSON.parse(fs.readFileSync(f(job, 'fx', 'segments.json'), 'utf8')) : [];
+    const key = keyOf('final', fileKey(f(job, 'tight.mp4')), job.state.overlayKey ?? fileKey(f(job, 'overlay.mov')), audio ? fileKey(audio) : 'camera', track, COMPOSITE_RECIPE, hq, fx.map((s) => [fileKey(s.file), s.offset, s.windows]));
     if (fromCache(job, () => restoreFile('final', key, '.mp4', out))) { log(`♻️ identical inputs — final reel reused → ${out}`); return; }
     const props = JSON.parse(fs.readFileSync(f(job, 'reel.json'), 'utf8'));
     log(`compositing your original footage under the graphics (colour untouched)${audio ? ', audio from Edits' : ''}…`);
-    const graphFile = writeGraph(job.dir, { track, duration: props.duration, audioInput: audio ? 2 : 0, scale: props.scale ?? 1 });
+    const graphFile = writeGraph(job.dir, { track, duration: props.duration, audioInput: audio ? 2 : 0, scale: props.scale ?? 1, fx: fx.map((s, i) => ({ input: (audio ? 3 : 2) + i, offset: s.offset, windows: s.windows })) });
     if (hq) log('fresh take: high-quality encode (CRF 12, slow)');
-    await sh('ffmpeg', compositeArgs({ tight: f(job, 'tight.mp4'), overlay: f(job, 'overlay.mov'), graphFile, out, audio, hq }), job.dir, () => {}, job.abort.signal);
+    await sh('ffmpeg', compositeArgs({ tight: f(job, 'tight.mp4'), overlay: f(job, 'overlay.mov'), graphFile, out, audio, hq, fx: fx.map((s) => s.file) }), job.dir, () => {}, job.abort.signal);
     storeFile('final', key, '.mp4', out);
     prune('final', config.cacheMaxBytes * 0.3);
     log(`✅ final.mp4 → ${out}`);
@@ -425,7 +470,7 @@ const STEPS = {
     if (!fs.existsSync(out)) throw new Error(`final.mp4 not found at ${out} — the render step did not land at the requested path`);
     const edl = JSON.parse(fs.readFileSync(f(job, 'edl.json'), 'utf8'));
     const track = fs.existsSync(f(job, 'track.json')) ? JSON.parse(fs.readFileSync(f(job, 'track.json'), 'utf8')).track : null;
-    const qa = await checkExport({ final: out, overlay: f(job, 'overlay.mov'), original: f(job, 'tight.mp4'), track, scenes: edl.scenes, dir: job.dir });
+    const qa = await checkExport({ final: out, overlay: f(job, 'overlay.mov'), original: f(job, 'tight.mp4'), track, scenes: edl.scenes, dir: job.dir, exclude: (edl.effects ?? []).map((e) => [e.start - 0.2, e.end + 0.2]) });
     log(`colour vs your original: ${qa.fidelity ? `max drift ${qa.fidelity.maxDrift} levels` : 'n/a'} · speaker saturation ${qa.colourRatio}× the original · ${qa.cards.filter((c) => c.similarity >= 0.55).length}/${qa.cards.length} cards on screen at their time`);
     st.qa = { ok: qa.ok, problems: qa.problems, colourDrift: qa.fidelity?.maxDrift ?? null, cards: `${qa.cards.filter((c) => c.similarity >= 0.55).length}/${qa.cards.length}` };
     if (!qa.ok) throw new Error(`QA failed: ${qa.problems.join('; ')}`);
@@ -474,7 +519,7 @@ function reelProps(job, edl) {
     const [w, h] = pngSize(f(job, file));
     screens[s.props.shot] = { file, w, h, focus: SCREENS[s.props.shot]?.focus };
   }
-  return { video: 'tight.mp4', duration: edl.duration, scale: outputScale(job.state.resolution), scenes: edl.scenes.map(({ id, start, dur, kind, props, layout }) => ({ id, start, dur, kind, props, ...(layout ? { layout } : {}) })), zooms: edl.zooms, assets, screens };
+  return { video: 'tight.mp4', duration: edl.duration, scale: outputScale(job.state.resolution), effects: (edl.effects ?? []).map((e) => ({ start: e.start, end: e.end, zone: fxZone(e.fx) })), scenes: edl.scenes.map(({ id, start, dur, kind, props, layout }) => ({ id, start, dur, kind, props, ...(layout ? { layout } : {}) })), zooms: edl.zooms, assets, screens };
 }
 /** Render/composite scale so the output matches the camera: 1440-wide 9:16 → 4/3 (1440x2560). Never upscale; cap at 2. */
 export function outputScale(resolution) {

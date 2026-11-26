@@ -57,6 +57,12 @@ function render(j){last=j;busy=j.status==='running'||j.status==='queued';documen
       ${j.output?`<img class="sheet" alt="One frame per card" src="/api/contact/${encodeURIComponent(j.id)}?v=${t1}" onerror="this.remove()">
       <div class="actions"><button class="btn" id="take" type="button" title="Same video and settings; new direction, everything regenerated">New take</button><button class="btn" id="reveal" type="button">Show in Finder</button><a class="btn" href="/api/video/${encodeURIComponent(j.id)}" download="${esc(base(j.video).replace(/\.[^.]+$/,''))}-edited.mp4">Download</a></div>`:''}
    </div></div>
+   ${j.breakdown?`<details class="notesbox" ${j.status!=='done'?'open':''}><summary>Director's notes</summary>
+     <dl class="dn"><dt>Promise</dt><dd>${esc(j.breakdown.promise)}</dd><dt>Open loop</dt><dd>${esc(j.breakdown.open_loop)}</dd>
+     <dt>Hook</dt><dd>${(j.breakdown.hooks||[]).map(h=>h===j.breakdown.hook?`<b>“${esc(h)}”</b>`:`<span class="alt">“${esc(h)}”</span>`).join(' · ')}</dd>
+     <dt>Payoff</dt><dd>${esc(j.breakdown.payoff)}</dd>
+     <dt>First seconds</dt><dd>${(j.breakdown.first_seconds||[]).map(x=>`<div><span class="num">${esc(x.t)}</span> ${esc(x.screen)}</div>`).join('')}</dd>
+     ${(j.breakdown.risks||[]).length?`<dt>Attention risks</dt><dd>${j.breakdown.risks.map(x=>`<div>${esc(x.at)} — ${esc(x.risk)} <span class="alt">→ ${esc(x.fix)}</span></div>`).join('')}</dd>`:''}</dl></details>`:''}
    <div class="steps"><h2>Steps</h2>${steps}</div>`;
   if(player)$('slot').appendChild(player);
   const take=$('take');if(take)take.onclick=async()=>{take.disabled=true;take.textContent='Starting…';

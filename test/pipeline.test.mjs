@@ -8,7 +8,7 @@ import { MODELS } from '../server/claude.mjs';
 import { SCENE_KINDS } from '../server/catalog.mjs';
 
 test('step order is fixed and creative decisions precede execution', () => {
-  assert.deepEqual(STEP_DEFS('high').map((s) => s.key), ['probe', 'transcribe', 'tighten', 'translate', 'direction', 'assets', 'resolve', 'captions', 'audio', 'graphics', 'composite', 'verify']);
+  assert.deepEqual(STEP_DEFS('high').map((s) => s.key), ['probe', 'transcribe', 'tighten', 'translate', 'direction', 'assets', 'resolve', 'captions', 'audio', 'graphics', 'effects', 'composite', 'verify']);
 });
 
 test('models: Opus directs; rendering is local; the Edits edit is plain tool calls (a model only writes Hinglish)', () => {
@@ -37,7 +37,7 @@ test('createJob sets budgets by quality and creates the job dir', () => {
   try {
     assert.equal(j.state.budgets.captions, config.budgets.captions);
     assert.ok(fs.existsSync(path.join(j.dir, 'state.json')));
-    assert.equal(j.state.steps.length, 12);
+    assert.equal(j.state.steps.length, 13);
     assert.deepEqual(j.state.terms, config.defaultTerms, 'no Terms → the default glossary');
   } finally { fs.rmSync(j.dir, { recursive: true, force: true }); fs.rmSync(tmp, { recursive: true, force: true }); }
 });
@@ -278,9 +278,9 @@ test('resumeJob migrates a legacy job so the new step actually runs', () => {
   } finally { fs.rmSync(j.dir, { recursive: true, force: true }); fs.rmSync(d, { recursive: true, force: true }); }
 });
 
-test('audio (Edits) and graphics (Remotion) are one parallel group — and nothing else is', () => {
+test('audio (Edits), graphics (Remotion) and effects run as one parallel group — and nothing else does', () => {
   const g = STEP_DEFS('high').filter((d) => d.group).map((d) => [d.key, d.group]);
-  assert.deepEqual(g, [['audio', 'produce'], ['graphics', 'produce']]);
+  assert.deepEqual(g, [['audio', 'produce'], ['graphics', 'produce'], ['effects', 'produce']]);
   const keys = STEP_DEFS('high').map((d) => d.key);
   assert.ok(keys.indexOf('captions') < keys.indexOf('graphics'), 'graphics need the caption lines');
   assert.ok(keys.indexOf('composite') > keys.indexOf('graphics') && keys.indexOf('composite') > keys.indexOf('audio'));

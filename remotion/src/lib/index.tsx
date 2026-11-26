@@ -16,10 +16,12 @@ const SHADOW_BIG = '0 2px 0 #0000000d, 0 26px 60px -24px #3a2f1f66';
 const GRAIN = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="180" height="180"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" stitchTiles="stitch"/><feColorMatrix values="0 0 0 0 0.35  0 0 0 0 0.3  0 0 0 0 0.22  0 0 0 0.09 0"/></filter><rect width="100%" height="100%" filter="url(#n)"/></svg>')}")`;
 
 // ───────── motion helpers ─────────
-const useSpring = (delay = 0, stiffness = 150, damping = 17) => {
+// Entrances: IBM Carbon "expressive entrance" cubic-bezier(0,0,0.3,1) over 300 ms — ease-out, no bounce, never linear
+// (NN/g: 200-400 ms for substantial moves). The name stays for the call sites; extra args are ignored.
+const ENTER = Easing.bezier(0, 0, 0.3, 1);
+const useSpring = (delay = 0, _stiffness?: number, _damping?: number) => {
   const f = useCurrentFrame();
-  const {fps} = useVideoConfig();
-  return spring({frame: f - delay, fps, config: {damping, stiffness, mass: 0.8}});
+  return interpolate(f - delay, [0, 9], [0, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: ENTER});
 };
 const pop = (p: number, rise = 36) => ({opacity: Math.min(1, p * 1.4), transform: `translateY(${(1 - p) * rise}px) scale(${0.95 + 0.05 * p})`});
 const clamp = {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'} as const;
@@ -30,6 +32,18 @@ const clamp = {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'} as const;
  * is in the bottom half). In the panel, content is measured and scaled down to fit, so no card ever clips or overflows.
  */
 export const PanelContext = React.createContext<{height: number} | null>(null);
+/** How long THIS card is on screen (frames). useVideoConfig() inside a Sequence still reports the whole reel. */
+export const CardContext = React.createContext<{dur: number} | null>(null);
+const useCardDur = () => { const c = React.useContext(CardContext); const {durationInFrames} = useVideoConfig(); return c?.dur ?? durationInFrames; };
+/**
+ * STAGED REVEALS (motion doctrine: "pause at any second — something meaningful must be mid-flight"): reveal i of n lands
+ * between the card's first frames and ~60% of its time on screen, so the frame keeps gaining information until it leaves.
+ */
+const useBeats = (n: number) => {
+  const D = useCardDur();
+  const first = 5, last = Math.max(first + (n - 1) * 7, Math.round(D * 0.6));
+  return (i: number) => (n <= 1 ? first : Math.round(first + ((last - first) * i) / (n - 1)));
+};
 
 const FitBox: React.FC<{children: React.ReactNode; maxH: number; align: 'center' | 'start'}> = ({children, maxH, align}) => {
   const ref = React.useRef<HTMLDivElement>(null);
@@ -44,12 +58,12 @@ const FitBox: React.FC<{children: React.ReactNode; maxH: number; align: 'center'
   );
 };
 
-const Stage: React.FC<{children: React.ReactNode; tag?: string; align?: 'center' | 'start'}> = ({children, tag, align = 'center'}) => {
+const Stage: React.FC<{children: React.ReactNode; tag?: string; align?: 'center' | 'start'; typeZoom?: boolean}> = ({children, tag, align = 'center', typeZoom = true}) => {
   const f = useCurrentFrame();
   const t = f / 30;
   const ctx = React.useContext(PanelContext);
   const panel = ctx && ctx.height < 1200 ? ctx : null; // a FULL-SCREEN card lays out with the full-frame safe zones
-  const full = !!ctx && ctx.height >= 1200;
+  const full = !!ctx && ctx.height >= 1200 && typeZoom; // the bigger type scale (screenshots opt out: they size to the frame)
   // panel: IG's top bar covers ~120px of the frame; keep the tag below it and leave a margin above the seam
   const z = panel ? {tagTop: 128, contentTop: 196, bottom: 54, side: 64} : {tagTop: safe.tagTop, contentTop: safe.contentTop, bottom: safe.bottom, side: 76};
   const H = panel ? panel.height : 1920;
@@ -100,7 +114,7 @@ const DrawIcon: React.FC<{name?: IconName; size?: number; color?: string; delay?
   const p = interpolate(f - delay, [0, dur], [0, 1], {...clamp, easing: Easing.inOut(Easing.cubic)});
   const kids = React.Children.toArray((ICONS[name] as React.ReactElement<{children?: React.ReactNode}>).props.children ?? ICONS[name]);
   return (
-    <svg width={size} height={size} viewBox="0 0 48 48" fill="none" stroke={color} strokeWidth={2.6} strokeLinecap="round" strokeLinejoin="round" style={{transform: `scale(${0.92 + 0.08 * p})`}}>
+    <svg width={size} height={size} viewBox="0 0 48 48" fill="none" stroke={color} strokeWidth={2.6} strokeLinecap="round" strokeLinejoin="round" style={{transform: `scale(${0.92 + 0.08 * p})`, opacity: p > 0.01 ? 1 : 0}}>
       {kids.map((el, i) => React.isValidElement(el) ? React.cloneElement(el as React.ReactElement<Record<string, unknown>>, {key: i, pathLength: 1, strokeDasharray: 1, strokeDashoffset: 1 - p}) : null)}
     </svg>
   );
@@ -146,7 +160,8 @@ export const Hook: React.FC<{text: string; hot?: string[]; sub?: string; tag?: s
   const panel = usePanel();
   const words = text.split(' ');
   const isHot = (w: string) => hot.some((h) => w.toLowerCase().replace(/[^a-z0-9]/g, '') === h.toLowerCase().replace(/[^a-z0-9]/g, ''));
-  const subP = useSpring(opening ? 6 : words.length * 4 + 4);
+  const D = useCardDur();
+  const subP = useSpring(opening ? Math.round(D * 0.35) : Math.max(words.length * 4 + 4, Math.round(D * 0.4)));
   const size = panel ? (text.length > 22 ? 112 : 136) : 124;
   const line = (
     <div style={{fontSize: opening ? size + 12 : size, fontWeight: 800, lineHeight: 1.04, letterSpacing: -3, display: 'flex', flexWrap: 'wrap', gap: '4px 24px'}}>
@@ -194,15 +209,16 @@ export const Flow: React.FC<{title?: string; nodes: {label: string; note?: strin
   // accept a node index OR its label (directors naturally write the label)
   const hi = typeof highlight === 'string' ? nodes.findIndex((n) => n.label.toLowerCase() === highlight.toLowerCase()) : highlight;
   // inside the reel every Flow uses the wide row/2×2 layout (split panel and full screen alike); the tall stack is standalone-only
+  const beat = useBeats(nodes.length);
   if (panel || React.useContext(PanelContext)) return <FlowRow title={title} nodes={nodes} hi={hi} tag={tag} />;
   return (
     <Stage tag={tag}>
       <Heading text={title} />
       {nodes.map((n, i) => {
-        const p = useSpring(8 + i * 11);
+        const p = useSpring(beat(i));
         const hot = hi === i;
-        const grow = interpolate(f - (14 + i * 11), [0, 10], [0, 1], {...clamp, easing: Easing.out(Easing.quad)});
-        const packet = ((f - 24 - i * 11) % 36) / 36;
+        const grow = interpolate(f - (beat(i) + 6), [0, 10], [0, 1], {...clamp, easing: Easing.out(Easing.quad)});
+        const packet = ((f - beat(i) - 16) % 36) / 36;
         return (
           <React.Fragment key={i}>
             <div style={{display: 'flex', alignItems: 'center', gap: 28, background: hot ? theme.cardHi : theme.card, border: `3px solid ${hot ? theme.accent : theme.line}`, borderRadius: 30, padding: '26px 34px', boxShadow: hot ? SHADOW : 'none', ...pop(p)}}>
@@ -226,19 +242,20 @@ export const Flow: React.FC<{title?: string; nodes: {label: string; note?: strin
 const FlowRow: React.FC<{title?: string; nodes: {label: string; note?: string; icon?: IconName}[]; hi?: number; tag?: string}> = ({title, nodes, hi, tag}) => {
   // ≤3 nodes: one row. 4 nodes: two rows of two (A → B, then C → D) so every label stays big enough for a phone.
   const rows = nodes.length > 3 ? [nodes.slice(0, 2), nodes.slice(2)] : [nodes];
+  const beat = useBeats(nodes.length);
   return (
     <Stage tag={tag}>
       <Heading text={title} />
       {rows.map((row, r) => (
         <React.Fragment key={r}>
-          {r > 0 ? <Link vertical delay={6 + 2 * 9} /> : null}
+          {r > 0 ? <Link vertical delay={beat(2) - 4} /> : null}
           <div style={{display: 'flex', alignItems: 'stretch'}}>
             {row.map((nd, j) => {
               const i = r * 2 + j;
               return (
                 <React.Fragment key={i}>
-                  <FlowNode nd={nd} hot={hi === i} delay={6 + i * 9} />
-                  {j < row.length - 1 ? <Link delay={10 + i * 9} /> : null}
+                  <FlowNode nd={nd} hot={hi === i} delay={beat(i)} />
+                  {j < row.length - 1 ? <Link delay={beat(i) + 4} /> : null}
                 </React.Fragment>
               );
             })}
@@ -282,6 +299,7 @@ export const Fanout: React.FC<{title?: string; from: {label: string; icon?: Icon
   const panel = usePanel();
   const W = panel ? 952 : 928, colW = W / n;
   const LH = panel ? 120 : 190; // link height
+  const beat = useBeats(n + 1); // the source lands first, then each target on its own beat
   return (
     <Stage tag={tag}>
       <Heading text={title} />
@@ -293,9 +311,9 @@ export const Fanout: React.FC<{title?: string; from: {label: string; icon?: Icon
       <svg width={W} height={LH} style={{display: 'block', margin: '0 auto'}}>
         {to.map((_, i) => {
           const x2 = colW * i + colW / 2;
-          const d = interpolate(f - (10 + i * 5), [0, 14], [0, 1], {...clamp, easing: Easing.out(Easing.cubic)});
+          const d = interpolate(f - (beat(i + 1) - 6), [0, 12], [0, 1], {...clamp, easing: Easing.out(Easing.cubic)});
           const path = `M ${W / 2} 0 C ${W / 2} ${LH * 0.53}, ${x2} ${LH * 0.42}, ${x2} ${LH}`;
-          const dot = ((f - 24 - i * 4) % 30) / 30;
+          const dot = ((f - beat(i + 1) - 8) % 30) / 30;
           return (
             <g key={i}>
               <path d={path} stroke={theme.mute} strokeWidth={5} fill="none" strokeDasharray={400} strokeDashoffset={400 * (1 - d)} strokeLinecap="round" />
@@ -306,7 +324,7 @@ export const Fanout: React.FC<{title?: string; from: {label: string; icon?: Icon
       </svg>
       <div style={{display: 'flex'}}>
         {to.map((t, i) => (
-          <div key={i} style={{width: colW, padding: '0 8px', ...pop(useSpring(18 + i * 5))}}>
+          <div key={i} style={{width: colW, padding: '0 8px', ...pop(useSpring(beat(i + 1)))}}>
             <div style={{background: theme.card, border: `3px solid ${theme.line}`, borderRadius: 24, padding: '22px 6px', textAlign: 'center'}}>
               <div style={{display: 'flex', justifyContent: 'center'}}><Icon name={t.icon} size={panel ? 80 : 64} color={theme.mute} /></div>
               <div style={{fontSize: panel ? (n > 3 ? 34 : 44) : n > 3 ? 28 : 34, fontWeight: 800, marginTop: 12, lineHeight: 1.08}}>{t.label}</div>
@@ -321,7 +339,8 @@ export const Fanout: React.FC<{title?: string; from: {label: string; icon?: Icon
 /** Numbered steps (request lifecycle, algorithm). Max 5. */
 export const Steps: React.FC<{title?: string; steps: {label: string; note?: string}[]; tag?: string}> = ({title, steps, tag}) => {
   const f = useCurrentFrame();
-  const prog = interpolate(f, [8, 8 + steps.length * 12], [0, 1], {...clamp, easing: Easing.inOut(Easing.quad)});
+  const beat = useBeats(steps.length);
+  const prog = interpolate(f, [beat(0), beat(steps.length - 1) + 8], [0, 1], {...clamp, easing: Easing.inOut(Easing.quad)});
   return (
     <Stage tag={tag} align="start">
       <Heading text={title} />
@@ -329,7 +348,7 @@ export const Steps: React.FC<{title?: string; steps: {label: string; note?: stri
         <div style={{position: 'absolute', left: 39, top: 40, bottom: 40, width: 5, background: theme.line, borderRadius: 3}} />
         <div style={{position: 'absolute', left: 39, top: 40, height: `calc((100% - 80px) * ${prog})`, width: 5, background: theme.accent, borderRadius: 3}} />
         {steps.map((s, i) => (
-          <div key={i} style={{display: 'flex', gap: 34, alignItems: 'center', marginBottom: 40, ...pop(useSpring(8 + i * 12))}}>
+          <div key={i} style={{display: 'flex', gap: 34, alignItems: 'center', marginBottom: 40, ...pop(useSpring(beat(i)))}}>
             <div style={{width: 84, height: 84, borderRadius: 42, background: theme.accent, color: '#fff', fontSize: 46, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, boxShadow: 'none'}}>{i + 1}</div>
             <div><div style={{fontSize: 52, fontWeight: 800, lineHeight: 1.1}}>{s.label}</div>{s.note ? <div style={{fontSize: 34, color: theme.dim, marginTop: 4}}>{s.note}</div> : null}</div>
           </div>
@@ -344,13 +363,14 @@ export const Chart: React.FC<{title?: string; bars: {label: string; value: numbe
   const f = useCurrentFrame();
   const max = Math.max(...bars.map((b) => b.value));
   const top = bars.findIndex((b) => b.value === max);
+  const beat = useBeats(bars.length);
   return (
     <Stage tag={tag}>
       <Heading text={title} />
       {bars.map((b, i) => {
-        const w = interpolate(spring({frame: f - (8 + i * 8), fps: 30, config: {damping: 18, stiffness: 90}}), [0, 1], [0, b.value / max]);
+        const w = interpolate(spring({frame: f - beat(i), fps: 30, config: {damping: 18, stiffness: 90}}), [0, 1], [0, b.value / max]);
         return (
-          <div key={i} style={{marginBottom: 38, ...pop(useSpring(6 + i * 8))}}>
+          <div key={i} style={{marginBottom: 38, ...pop(useSpring(beat(i) - 2))}}>
             <div style={{display: 'flex', justifyContent: 'space-between', fontSize: 40, fontWeight: 700, marginBottom: 10}}>
               <span>{b.label}</span><span style={{color: i === top ? theme.accent : theme.dim}}>{Math.round(b.value * Math.min(1, w / (b.value / max || 1)))}{b.unit ?? ''}</span>
             </div>
@@ -398,7 +418,8 @@ export const Stat: React.FC<{value: string; label: string; sub?: string; tag?: s
   const f = useCurrentFrame();
   const panel = usePanel();
   const m = value.match(/^([^\d-]*)(-?[\d,.]+)(.*)$/);
-  const k = interpolate(f, [4, 34], [0, 1], {...clamp, easing: Easing.out(Easing.cubic)});
+  const D = useCardDur();
+  const k = interpolate(f, [4, Math.max(34, Math.round(D * 0.55))], [0, 1], {...clamp, easing: Easing.out(Easing.cubic)});
   let shown = value;
   if (m) {
     const target = parseFloat(m[2].replace(/,/g, '')), dec = (m[2].split('.')[1] || '').length, v = target * k;
@@ -429,11 +450,12 @@ export const Stat: React.FC<{value: string; label: string; sub?: string; tag?: s
 export const Bullets: React.FC<{title?: string; items: string[]; tag?: string}> = ({title, items, tag}) => {
   const f = useCurrentFrame();
   const panel = usePanel();
+  const beat = useBeats(items.length);
   return (
     <Stage tag={tag}>
       <Heading text={title} />
       {items.map((it, i) => {
-        const d = 8 + i * 12;
+        const d = beat(i);
         const p = useSpring(d);
         const c = interpolate(f - d - 4, [0, 10], [0, 1], {...clamp, easing: Easing.out(Easing.cubic)});
         return (
@@ -454,6 +476,8 @@ export const Bullets: React.FC<{title?: string; items: string[]; tag?: string}> 
 export const Compare: React.FC<{left: {title: string; points: string[]}; right: {title: string; points: string[]}; tag?: string}> = ({left, right, tag}) => {
   const f = useCurrentFrame();
   const vs = useSpring(12, 220, 12);
+  const total = left.points.length + right.points.length;
+  const beat = useBeats(total + 1);
   const side = (s: {title: string; points: string[]}, si: number) => {
     const c = si ? theme.warm : theme.accent;
     const x = interpolate(useSpring(si * 6, 120, 18), [0, 1], [si ? 140 : -140, 0]);
@@ -461,7 +485,7 @@ export const Compare: React.FC<{left: {title: string; points: string[]}; right: 
       <div key={si} style={{flex: 1, minWidth: 0, background: theme.card, border: `3px solid ${c}`, borderRadius: 26, padding: '28px 28px', boxShadow: SHADOW, transform: `translateX(${x}px)`, opacity: 1 - Math.min(1, Math.abs(x) / 140)}}>
         <div style={{fontSize: 52, fontWeight: 800, color: c, marginBottom: 14, lineHeight: 1.05}}>{s.title}</div>
         {s.points.map((pt, i) => {
-          const d = 16 + si * 6 + i * 8;
+          const d = beat(1 + (si ? left.points.length : 0) + i);
           const t = interpolate(f - d, [0, 8], [0, 1], {...clamp, easing: Easing.out(Easing.cubic)});
           return <div key={i} style={{display: 'flex', gap: 12, alignItems: 'baseline', fontSize: 38, fontWeight: 600, marginTop: 12, opacity: t, transform: `translateY(${(1 - t) * 14}px)`}}><span style={{color: c, fontWeight: 800}}>✓</span><span>{pt}</span></div>;
         })}
@@ -536,7 +560,7 @@ export const Repo: React.FC<{repo: string; tag?: string}> = ({repo, tag = 'GITHU
 /** A real tool/site: browser frame with a live screenshot that slowly pans in, plus its icon, name and description. */
 export const Site: React.FC<{url: string; name?: string; tag?: string}> = ({url, name, tag = 'TOOL'}) => {
   const f = useCurrentFrame();
-  const {durationInFrames} = useVideoConfig();
+  const durationInFrames = useCardDur();
   const key = (() => { try { return new URL(url).href; } catch { return url; } })(); // assets are keyed by the canonical href
   const d = getAssets().sites?.[key];
   const panel = usePanel();
@@ -546,7 +570,7 @@ export const Site: React.FC<{url: string; name?: string; tag?: string}> = ({url,
   const host = d?.domain ?? (() => { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url; } })();
   const label = name ?? d?.name ?? host;
   return (
-    <Stage tag={tag}>
+    <Stage tag={tag} typeZoom={false}>
       <div style={{border: `3px solid ${theme.line}`, borderRadius: 28, overflow: 'hidden', background: theme.card, boxShadow: SHADOW_BIG, ...pop(useSpring(0))}}>
         <div style={{display: 'flex', alignItems: 'center', gap: 14, padding: '18px 24px', background: theme.cardHi}}>
           {['#ff5f57', '#febc2e', '#28c840'].map((c) => <div key={c} style={{width: 18, height: 18, borderRadius: 9, background: c}} />)}
@@ -571,14 +595,16 @@ export const Site: React.FC<{url: string; name?: string; tag?: string}> = ({url,
 /** A REAL screenshot of the Edits app (captured + token-redacted by the pipeline) in a window frame, slowly pushing in on `focus`. */
 export const Screen: React.FC<{shot: string; title?: string; caption?: string; tag?: string; focus?: {x: number; y: number}}> = ({shot, title, caption, tag = 'LIVE', focus}) => {
   const f = useCurrentFrame();
-  const {durationInFrames} = useVideoConfig();
+  const durationInFrames = useCardDur();
   const screens = (getInputProps() as {screens?: Record<string, {file: string; w: number; h: number; focus?: {x: number; y: number}}>}).screens ?? {};
   const s = screens[shot];
   const fx = focus ?? s?.focus ?? {x: 0.5, y: 0.4};
   const k = interpolate(f, [0, durationInFrames], [1.18, 1.5], {...clamp, easing: Easing.inOut(Easing.cubic)}); // UI text must be readable on a phone
-  const ratio = Math.max(1.55, s ? s.w / s.h : 1.6); // tall windows are cropped to a wide view around `focus`
+  const full = (React.useContext(PanelContext)?.height ?? 0) >= 1200;
+  // split panel: a wide view around `focus`; FULL screen: a tall crop so the real screen fills the frame and stays readable
+  const ratio = full ? 1.2 : Math.max(1.55, s ? s.w / s.h : 1.6); // 952 wide × ~790 tall fills the full-screen content area
   return (
-    <Stage tag={tag}>
+    <Stage tag={tag} typeZoom={false}>
       {title ? <div style={{fontSize: 60, fontWeight: 800, lineHeight: 1.06, marginBottom: 24, ...pop(useSpring(0))}}>{title}</div> : null}
       <div style={{position: 'relative', borderRadius: 26, overflow: 'hidden', border: `3px solid ${theme.line}`, boxShadow: SHADOW_BIG, ...pop(useSpring(4))}}>
         <div style={{width: '100%', aspectRatio: `${ratio}`, overflow: 'hidden', background: '#1c1d20'}}>

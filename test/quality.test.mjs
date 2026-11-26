@@ -124,11 +124,19 @@ test('trackExpr: run-length terms, base omitted, single frames use eq()', () => 
 
 test('filterGraph: the speaker is only moved/scaled (no colour filters on it); graphics on top; voice to -14 LUFS', () => {
   const g = filterGraph({ track: [{ y: 0, zoom: 1 }, { y: 672, zoom: 1 }], duration: 2 });
-  const spk = g.split('\n').find((l) => l.startsWith('[0:v]'));
-  assert.match(spk, /zoompan/); assert.match(spk, /format=yuvj420p\[spk\];?$/);
+  assert.match(g, /\[0:v\]fps=30,format=yuvj420p\[cam0\]/); assert.match(g, /\[cam0\]zoompan=[^;]*format=yuvj420p\[spk\]/);
   for (const banned of ['eq=', 'colorbalance', 'curves', 'lut', 'hue=', 'colorchannelmixer', 'colorspace', 'out_color_matrix']) assert.ok(!g.includes(banned), banned);
   assert.match(g, /overlay=x=0:y='0\+eq\(n,1\)\*672'/);
   assert.match(g, /\[base\]\[g\]overlay/); assert.match(g, /loudnorm=I=-14/);
+});
+
+test('effect slices replace the camera ONLY inside their windows, converted BT.601-limited → the camera\'s BT.709-full', () => {
+  const g = filterGraph({ track: [{ y: 0, zoom: 1 }], duration: 10, audioInput: 2, fx: [{ input: 3, offset: 1.5, windows: [[2, 4], [4.5, 5.5]] }] });
+  assert.match(g, /\[3:v\]colorspace=all=bt709:iall=bt601-6-625:irange=tv:range=pc[^;]*setpts=PTS\+1\.500\/TB\[fx0\]/);
+  assert.match(g, /\[cam0\]\[fx0\]overlay=0:0:eof_action=pass:enable='between\(t,2\.000,4\.000\)\+between\(t,4\.500,5\.500\)'\[cam1\]/);
+  assert.match(g, /\[cam1\]zoompan=/);
+  const a = compositeArgs({ tight: 't', overlay: 'o', graphFile: 'g', out: 'x', audio: 'a', fx: ['s0.mp4'] });
+  assert.deepEqual(a.slice(a.indexOf('-i'), a.indexOf('-filter_complex_script')), ['-i', 't', '-i', 'o', '-i', 'a', '-i', 's0.mp4']);
 });
 
 test('compositeArgs: encodes with the camera\'s colour description (full range, BT.709 everywhere)', () => {
