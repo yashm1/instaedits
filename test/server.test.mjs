@@ -52,3 +52,10 @@ test('unsafe ids are rejected on events / resume / cancel', async () => {
 test('static serving cannot escape public/', async () => {
   for (const p of ['/../package.json', '/..%2fpackage.json', '/%2e%2e/server/config.mjs']) assert.notEqual((await fetch(base + p)).status, 200, p);
 });
+
+test('the file picker endpoint is POST-only and refuses cross-site requests (no dialogs from web pages)', async () => {
+  assert.equal((await post('/api/pick', {}, { origin: 'https://evil.com' })).status, 403);
+  assert.equal((await post('/api/pick', '{}', { 'content-type': 'text/plain' })).status, 415);
+  assert.notEqual((await fetch(base + '/api/pick')).status, 200, 'a GET (e.g. an <img> on a web page) must not open a dialog');
+  const r = await fetch(base + '/api/recent-videos'); assert.equal(r.status, 200); assert.ok(Array.isArray(await r.json()));
+});

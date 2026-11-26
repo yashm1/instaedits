@@ -71,6 +71,13 @@ async function paint(file, boxes) {
   fs.renameSync(tmp, file);
 }
 
+/** Is this OCR of the EDITOR (not the projects grid)? The editor has Export + its tool panels; the grid has "Projects"/"New project". */
+export const isEditorScreen = (obs) => {
+  const t = obs.map((o) => o.text.trim().toLowerCase());
+  // the editor's own title bar shows "New project 13", so only the grid's "Projects" heading is a reject signal
+  return t.includes('export') && t.some((x) => /^(media|captions|sound fx|transitions|effects)$/.test(x)) && !t.includes('projects');
+};
+
 /** OCR → redact → OCR again. Throws (and deletes the file) if a secret survives. Returns the number of boxes painted. */
 export async function redactFile(file, token, deps = {}) {
   const read = deps.ocr ?? ocr;
@@ -103,7 +110,7 @@ export async function importScreen(key, src, { token = config.editsToken(), deps
  * Capture (or reuse, ≤7 days old) the Edits screenshots into config.screensDir. Best effort: returns what is available,
  * logs why anything is missing, never throws. `{ [key]: absolutePath }`.
  */
-export async function captureScreens({ log = () => {}, token = config.editsToken(), force = false } = {}) {
+export async function captureScreens({ log = () => {}, token = config.editsToken(), force = false } = {}) { // force: re-capture even recent screenshots
   const dir = config.screensDir; fs.mkdirSync(dir, { recursive: true });
   const have = {};
   const shoot = async (key, grab, check) => {
@@ -130,7 +137,13 @@ export async function captureScreens({ log = () => {}, token = config.editsToken
         for (let i = 1; i <= 3; i++) {
           await pexec('open', ['-a', 'Edits']); await new Promise((r) => setTimeout(r, 1500 * i));
           const cands = (await windows()).filter((w) => !w.name && w.w >= 1000 && w.h >= 600).sort((a, b) => (b.onscreen - a.onscreen) || (b.w * b.h - a.w * a.h));
-          for (const w of cands) { try { await captureWindow(w.id, file); return; } catch (e) { lastErr = e; } }
+          for (const w of cands) {
+            try {
+              await captureWindow(w.id, file);
+              if (isEditorScreen(await ocr(file))) return; // never ship the projects grid as "the editor"
+              lastErr = new Error('Edits showed its projects grid, not the editor'); fs.rmSync(file, { force: true });
+            } catch (e) { lastErr = e; }
+          }
         }
         throw lastErr;
       });

@@ -5,3 +5,5 @@ out/
 *.log
 .env.local
 screens/
+cache/
+vendor/

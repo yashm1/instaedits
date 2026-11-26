@@ -21,7 +21,7 @@ if (si > 0) {
   for (const t of process.argv[si + 1].split(',').map(Number)) {
     const frame = Math.min(composition.durationInFrames - 1, Math.max(0, Math.round(t * composition.fps)));
     const file = path.join(out, `still-${t.toFixed(2)}.png`);
-    await renderStill({composition, serveUrl, inputProps, frame, output: file});
+    await renderStill({composition, serveUrl, inputProps, frame, output: file, scale: inputProps.scale ?? 1});
     emit({still: file, t});
   }
   emit({finished: true});
@@ -30,8 +30,11 @@ if (si > 0) {
 let last = -1;
 // overlayOnly: lossless ProRes 4444 WITH ALPHA (graphics only) — the speaker is composited by ffmpeg from the original file.
 // Otherwise (previews): h264. Remotion's own H.264 encode shifts colour by a few levels, so it is never the deliverable.
+// a scale must give whole pixels on both axes (Remotion validates); otherwise fall back to the base size
+const s = inputProps.scale ?? 1;
+if (!Number.isInteger(1080 * s) || !Number.isInteger(1920 * s)) inputProps.scale = 1;
 const enc = inputProps.overlayOnly
-  ? {codec: 'prores', proResProfile: '4444', imageFormat: 'png', pixelFormat: 'yuva444p10le', muted: true}
+  ? {codec: 'prores', proResProfile: '4444', imageFormat: 'png', pixelFormat: 'yuva444p10le', muted: true, scale: inputProps.scale ?? 1} // scale: render at the camera's own resolution (crisp text, no upscaling)
   : {codec: 'h264', crf: 16, x264Preset: 'slow', pixelFormat: 'yuv420p', colorSpace: 'bt709', audioCodec: 'aac', audioBitrate: '256k'};
 await renderMedia({
   composition, serveUrl, inputProps, outputLocation: path.resolve(out), ...enc, concurrency: '50%',

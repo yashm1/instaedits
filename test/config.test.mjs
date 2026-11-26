@@ -40,3 +40,10 @@ test('default glossary includes the names speech recognition mishears on this ch
   const out = execFileSync('node', ['-e', "import('./server/config.mjs').then(m=>console.log(JSON.stringify(m.config.defaultTerms)))"], { env: { ...process.env, INSTAEDITS_TERMS: 'Kafka, Redis ,' }, encoding: 'utf8' });
   assert.deepEqual(JSON.parse(out), ['Kafka', 'Redis']);
 });
+
+test('tests never touch the real jobs/, staging, screenshots or cache folders (a test once stopped a live run)', () => {
+  const root = process.env.INSTAEDITS_TEST_ROOT;
+  assert.ok(root, 'run tests with `npm test` (it loads test/setup.mjs)');
+  for (const k of ['jobsDir', 'stagingDir', 'screensDir', 'cacheDir']) assert.ok(config[k].startsWith(root), `${k} = ${config[k]} must be under the test temp folder`);
+  assert.equal(config.cacheEnabled(), false);
+});

@@ -72,13 +72,19 @@ test('the alt transcript is sent to the translator as ALT lines, and is not pers
   assert.ok(merged.every((x) => !('alt' in x)));
 });
 
-test('translation is cached: a second run makes no LLM call but restores scriptEn', async () => {
-  const job = mkJob('hi'); const s = pipe.STEPS_FOR_TEST();
-  await s.translate(job, step(), () => {});
-  const n = calls().length; job.state.scriptEn = undefined;
-  const r = await s.translate(job, step(), () => {});
-  assert.equal(calls().length, n); assert.equal(r, undefined);
-  assert.match(job.state.scriptEn, /EN 1/);
+test('translation is cached across runs: the same speech again makes no LLM call (0 tokens) and restores scriptEn', async () => {
+  process.env.INSTAEDITS_CACHE = 'on'; process.env.INSTAEDITS_CACHE_DIR_UNUSED = '';
+  const { config: c } = await import('../server/config.mjs'); const saved = c.cacheDir; c.cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ie-cache-'));
+  try {
+    const s = pipe.STEPS_FOR_TEST();
+    await s.translate(mkJob('hi'), step(), () => {});
+    const n = calls().length;
+    const job2 = mkJob('hi'); // a NEW job, same speech
+    const r = await s.translate(job2, step(), () => {});
+    assert.equal(calls().length, n, 'no second LLM call');
+    assert.equal(r.cost, 0); assert.equal(r.cached, true);
+    assert.match(job2.state.scriptEn, /EN 1/);
+  } finally { fs.rmSync(c.cacheDir, { recursive: true, force: true }); c.cacheDir = saved; process.env.INSTAEDITS_CACHE = 'off'; }
 });
 
 test('a translation that drops a sentence fails loudly and writes nothing', async () => {
@@ -87,4 +93,19 @@ test('a translation that drops a sentence fails loudly and writes nothing', asyn
   await assert.rejects(() => pipe.STEPS_FOR_TEST().translate(job, step(), () => {}), /missing sentence\(s\) 3/);
   assert.ok(!fs.existsSync(path.join(job.dir, 'sentences.json')));
   fs.writeFileSync(mode, 'ok');
+});
+
+test('"Start fresh" asks the model again even when an identical answer is cached (and stores the new one)', async () => {
+  process.env.INSTAEDITS_CACHE = 'on';
+  const { config: c } = await import('../server/config.mjs'); const saved = c.cacheDir; c.cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ie-cache-'));
+  try {
+    const s = pipe.STEPS_FOR_TEST();
+    await s.translate(mkJob('hi'), step(), () => {});
+    const n = calls().length;
+    const fresh = mkJob('hi'); fresh.state.mode = 'fresh';
+    const r = await s.translate(fresh, step(), () => {});
+    assert.equal(calls().length, n + 1, 'a new LLM call');
+    assert.ok(!r.cached);
+    assert.ok(calls().at(-1).argv.includes('medium'), 'fresh = more effort');
+  } finally { fs.rmSync(c.cacheDir, { recursive: true, force: true }); c.cacheDir = saved; process.env.INSTAEDITS_CACHE = 'off'; }
 });

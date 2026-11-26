@@ -28,10 +28,19 @@ export async function connect() {
   await rpc('notifications/initialized', {}, true);
 }
 
-/** Call an Edits tool; returns parsed JSON when the tool returns JSON text. */
-export async function tool(name, args = {}) {
-  await connect();
-  const r = await rpc('tools/call', { name, arguments: args });
+/** A dropped connection (the app restarted, or was busy) — not a tool error. Worth a fresh session and a retry. */
+export const isConnectionError = (e) => /fetch failed|ECONNREFUSED|ECONNRESET|socket hang up|UND_ERR|other side closed/i.test(String(e?.message ?? e) + String(e?.cause?.code ?? ''));
+
+/** Call an Edits tool; returns parsed JSON when the tool returns JSON text. Reconnects (new session) after a dropped connection. */
+export async function tool(name, args = {}, { attempts = 4, delayMs = 1500 } = {}) {
+  let r;
+  for (let i = 1; ; i++) {
+    try { await connect(); r = await rpc('tools/call', { name, arguments: args }); break; } catch (e) {
+      if (!isConnectionError(e) || i >= attempts) throw e;
+      sid = null; // the app may have restarted: its old session id is gone
+      await new Promise((res) => setTimeout(res, delayMs * i));
+    }
+  }
   const text = r.content?.map((c) => c.text).join('') ?? '';
   if (r.isError) throw new Error(`${name}: ${text.slice(0, 200)}`);
   try { return JSON.parse(text); } catch { return text; }

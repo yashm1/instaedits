@@ -124,11 +124,19 @@ test('trackExpr: run-length terms, base omitted, single frames use eq()', () => 
 
 test('filterGraph: the speaker is only moved/scaled (no colour filters on it); graphics on top; voice to -14 LUFS', () => {
   const g = filterGraph({ track: [{ y: 0, zoom: 1 }, { y: 672, zoom: 1 }], duration: 2 });
-  const spk = g.split('\n').find((l) => l.startsWith('[0:v]'));
-  assert.match(spk, /zoompan/); assert.match(spk, /format=yuvj420p\[spk\];?$/);
+  assert.match(g, /\[0:v\]fps=30,format=yuvj420p\[cam0\]/); assert.match(g, /\[cam0\]zoompan=[^;]*format=yuvj420p\[spk\]/);
   for (const banned of ['eq=', 'colorbalance', 'curves', 'lut', 'hue=', 'colorchannelmixer', 'colorspace', 'out_color_matrix']) assert.ok(!g.includes(banned), banned);
   assert.match(g, /overlay=x=0:y='0\+eq\(n,1\)\*672'/);
   assert.match(g, /\[base\]\[g\]overlay/); assert.match(g, /loudnorm=I=-14/);
+});
+
+test('effect slices replace the camera ONLY inside their windows, converted BT.601-limited → the camera\'s BT.709-full', () => {
+  const g = filterGraph({ track: [{ y: 0, zoom: 1 }], duration: 10, audioInput: 2, fx: [{ input: 3, offset: 1.5, windows: [[2, 4], [4.5, 5.5]] }] });
+  assert.match(g, /\[3:v\]colorspace=all=bt709:iall=bt601-6-625:irange=tv:range=pc[^;]*setpts=PTS\+1\.500\/TB\[fx0\]/);
+  assert.match(g, /\[cam0\]\[fx0\]overlay=0:0:eof_action=pass:enable='between\(t,2\.000,4\.000\)\+between\(t,4\.500,5\.500\)'\[cam1\]/);
+  assert.match(g, /\[cam1\]zoompan=/);
+  const a = compositeArgs({ tight: 't', overlay: 'o', graphFile: 'g', out: 'x', audio: 'a', fx: ['s0.mp4'] });
+  assert.deepEqual(a.slice(a.indexOf('-i'), a.indexOf('-filter_complex_script')), ['-i', 't', '-i', 'o', '-i', 'a', '-i', 's0.mp4']);
 });
 
 test('compositeArgs: encodes with the camera\'s colour description (full range, BT.709 everywhere)', () => {
@@ -157,4 +165,41 @@ test('filterGraph: audio comes from the Edits mix when given, trimmed to exactly
   assert.match(filterGraph({ track: [{ y: 0, zoom: 1 }], duration: 5 }), /\[0:a\]atrim=0:5\.000/, 'dry run: the camera audio');
   const a = compositeArgs({ tight: 't', overlay: 'o', graphFile: 'g', out: 'x', audio: 'edits.mp4' });
   assert.deepEqual(a.slice(a.indexOf('-i'), a.indexOf('-filter_complex_script')), ['-i', 't', '-i', 'o', '-i', 'edits.mp4']);
+});
+
+import { linesFromWords } from '../server/captions.mjs';
+test('linesFromWords: lines break at punctuation and pauses, ≤3 words, balanced; lines hold until the next one', () => {
+  const W = (text, start, end) => ({ text, start, end });
+  const L = linesFromWords([W('ओ', 0.1, 0.3), W('भाई,', 0.3, 0.7), W('ये', 0.8, 1), W('पूरा', 1, 1.3), W('वीडियो', 1.3, 1.7), W('क्लॉड', 1.8, 2.1), W('ने', 2.1, 2.2), W('अब', 3.5, 3.8)]);
+  assert.ok(L.every((l) => l.words.length <= 3));
+  assert.equal(L[0].words.map((w) => w.text).join(' '), 'ओ भाई,', 'comma ends a phrase');
+  for (let i = 0; i + 1 < L.length; i++) assert.ok(L[i].end <= L[i + 1].start + 1e-9, 'no overlap');
+  const pause = L.find((l) => l.words[0].text === 'अब');
+  assert.ok(pause.start === 3.5 && L[L.indexOf(pause) - 1].end <= 2.8, 'a long pause ends the previous line ≤0.6 s after its last word');
+  for (const l of L) for (let j = 0; j + 1 < l.words.length; j++) assert.equal(l.words[j].end, l.words[j + 1].start, 'the highlight never blinks off mid-line');
+});
+
+test('compositeArgs: CRF 12 + medium by default; hq (fresh take) CRF 10 + slow; AAC 320k', () => {
+  const v = (a, k) => a[a.indexOf(k) + 1];
+  const n = compositeArgs({ tight: 't', overlay: 'o', graphFile: 'g', out: 'x' }), h = compositeArgs({ tight: 't', overlay: 'o', graphFile: 'g', out: 'x', hq: true });
+  assert.deepEqual([v(n, '-crf'), v(n, '-preset')], ['12', 'medium']);
+  assert.deepEqual([v(h, '-crf'), v(h, '-preset')], ['10', 'slow']);
+  assert.equal(v(n, '-b:a'), '320k');
+  assert.equal(v(h, '-pix_fmt'), 'yuvj420p', 'colour description unchanged');
+});
+
+import { isEditorScreen } from '../server/screens.mjs';
+test('isEditorScreen: the Edits editor passes; the projects grid (a wall of thumbnails) never does', () => {
+  const o = (...t) => t.map((text) => ({ text }));
+  assert.equal(isEditorScreen(o('New project 13', 'Media', 'Audio', 'Captions', 'Export', 'Feedback')), true, 'the editor title bar shows the project name');
+  assert.equal(isEditorScreen(o('Media', 'Audio', 'Text', 'Captions', 'Export', '00:24.24')), true);
+  assert.equal(isEditorScreen(o('Projects', 'New project 12', 'Today · 57 MB · 00:24', 'New project')), false);
+  assert.equal(isEditorScreen(o('Settings', 'Automation')), false);
+});
+
+test('filterGraph at native resolution: canvas = 1080x1920 × scale, speaker shift scaled with it', () => {
+  const g = filterGraph({ track: [{ y: 0, zoom: 1 }, { y: 672, zoom: 1 }], duration: 2, scale: 4 / 3 });
+  assert.match(g, /color=c=black:s=1440x2560/); assert.match(g, /zoompan=[^;]*s=1440x2560/);
+  assert.match(g, /eq\(n,1\)\*896/, '672 px × 4/3');
+  assert.match(filterGraph({ track: [{ y: 0, zoom: 1 }], duration: 2 }), /s=1080x1920/);
 });

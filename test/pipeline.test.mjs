@@ -8,15 +8,15 @@ import { MODELS } from '../server/claude.mjs';
 import { SCENE_KINDS } from '../server/catalog.mjs';
 
 test('step order is fixed and creative decisions precede execution', () => {
-  assert.deepEqual(STEP_DEFS('high').map((s) => s.key), ['probe', 'transcribe', 'tighten', 'translate', 'direction', 'assets', 'resolve', 'edit', 'render', 'verify']);
+  assert.deepEqual(STEP_DEFS('high').map((s) => s.key), ['probe', 'transcribe', 'tighten', 'translate', 'direction', 'assets', 'resolve', 'captions', 'audio', 'graphics', 'effects', 'composite', 'verify']);
 });
 
 test('models: Opus directs; rendering is local; the Edits edit is plain tool calls (a model only writes Hinglish)', () => {
   const m = (q, k) => STEP_DEFS(q).find((s) => s.key === k).model;
   assert.equal(m('high', 'direction'), MODELS.opus);
-  assert.match(m('high', 'render'), /^local/);
-  assert.match(m('high', 'edit'), /^local \(Edits tool calls\)/);
-  assert.ok(m('high', 'edit').includes(config.models.captions));
+  assert.match(m('high', 'graphics'), /^local/); assert.match(m('high', 'composite'), /^local/);
+  assert.equal(m('high', 'audio'), 'local (Edits tool calls)', 'the Edits step uses no model at all now');
+  assert.equal(m('high', 'captions'), config.models.captions);
   assert.ok(m('high', 'verify').includes(config.models.reviewer), 'full QA: a model watches the export');
   assert.equal(m('fast', 'verify'), 'local (ffmpeg)');
 });
@@ -37,7 +37,7 @@ test('createJob sets budgets by quality and creates the job dir', () => {
   try {
     assert.equal(j.state.budgets.captions, config.budgets.captions);
     assert.ok(fs.existsSync(path.join(j.dir, 'state.json')));
-    assert.equal(j.state.steps.length, 10);
+    assert.equal(j.state.steps.length, 13);
     assert.deepEqual(j.state.terms, config.defaultTerms, 'no Terms → the default glossary');
   } finally { fs.rmSync(j.dir, { recursive: true, force: true }); fs.rmSync(tmp, { recursive: true, force: true }); }
 });
@@ -276,4 +276,34 @@ test('resumeJob migrates a legacy job so the new step actually runs', () => {
     assert.ok(resumed.state.steps.some((x) => x.key === 'assets'));
     assert.deepEqual(resumed.state.steps.map((x) => x.key), STEP_DEFS('high').map((x) => x.key));
   } finally { fs.rmSync(j.dir, { recursive: true, force: true }); fs.rmSync(d, { recursive: true, force: true }); }
+});
+
+test('audio (Edits), graphics (Remotion) and effects run as one parallel group — and nothing else does', () => {
+  const g = STEP_DEFS('high').filter((d) => d.group).map((d) => [d.key, d.group]);
+  assert.deepEqual(g, [['audio', 'produce'], ['graphics', 'produce'], ['effects', 'produce']]);
+  const keys = STEP_DEFS('high').map((d) => d.key);
+  assert.ok(keys.indexOf('captions') < keys.indexOf('graphics'), 'graphics need the caption lines');
+  assert.ok(keys.indexOf('composite') > keys.indexOf('graphics') && keys.indexOf('composite') > keys.indexOf('audio'));
+});
+
+test('mode: "reuse" by default, "fresh" accepted, anything else refused', () => {
+  const { d, v } = tmpVideo();
+  const a = createJob({ script: 's', video: v, jobId: `tmo-a-${Date.now()}` });
+  const b = createJob({ script: 's', video: v, jobId: `tmo-b-${Date.now()}`, mode: 'fresh' });
+  try {
+    assert.equal(a.state.mode, 'reuse'); assert.equal(b.state.mode, 'fresh');
+    assert.throws(() => createJob({ script: 's', video: v, mode: 'yolo' }), /mode must be/);
+  } finally { for (const j of [a, b]) fs.rmSync(j.dir, { recursive: true, force: true }); fs.rmSync(d, { recursive: true, force: true }); }
+});
+
+import { outputScale } from '../server/pipeline.mjs';
+test('outputScale: the output matches the camera — 1440x2560 → 4/3; never upscale; odd shapes stay 1080x1920', () => {
+  assert.equal(outputScale('1440x2560'), 1440 / 1080);
+  assert.ok(Number.isInteger(1920 * outputScale('1440x2560')), 'whole pixels: 2560, not 2559.94');
+  assert.equal(outputScale('1080x1920'), 1);
+  assert.equal(outputScale('720x1280'), 1, 'never upscale');
+  assert.equal(outputScale('2160x3840'), 2);
+  assert.equal(outputScale('4320x7680'), 2, 'capped');
+  assert.equal(outputScale('1920x1080'), 1, 'not 9:16');
+  assert.equal(outputScale(undefined), 1);
 });

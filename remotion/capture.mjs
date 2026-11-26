@@ -20,7 +20,7 @@ try {
     try {
       await assertPublicHttpUrl(t.url); // again, right before navigating
       page = await browser.newPage({context: {indent: false, logLevel: 'error'}, logLevel: 'error', indent: false, pageIndex: i, onBrowserLog: null, onLog: () => {}});
-      await page.setViewport({width: 1280, height: 800, deviceScaleFactor: 1});
+      await page.setViewport({width: 1280, height: 800, deviceScaleFactor: 2}); // retina: page text stays sharp at native output size
       await withTimeout(page.goto({url: t.url, timeout: 15000}), 20000, 'navigation');
       await new Promise((r) => setTimeout(r, 1500)); // let fonts / hero animation settle
       const finalUrl = page.url();

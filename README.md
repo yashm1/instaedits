@@ -41,13 +41,13 @@ cp .env.example .env.local     # paste your Edits access token (Settings → Aut
 npm start                      # → http://127.0.0.1:4399
 ```
 
-Open the dashboard, enter the absolute path of your video (optionally: your script, the links you talk about — e.g. your GitHub repo — and names to spell right), choose the quality check (**Full** adds an AI review of the export) and press **Run workflow**. Tick **Dry run** first to plan and render without touching your editor (≈ $0.15).
+Open the dashboard and press **Browse…** to pick your video in the native macOS file dialog (or click a recent one, or paste a path). Optionally add the links you talk about (e.g. your GitHub repo) and names to spell right, then choose **Reuse** (fast: unchanged steps from earlier runs are reused) or **Start fresh** (a completely new take), and press **Create reel**. Each reel gets its own page: the finished video plays right there, next to the quality checks, the reviewer's notes, a frame of every card, **Show in Finder** and **Download** — and the step timeline below (parallel steps side by side; reused steps marked). **More options → Dry run** plans and renders without opening Edits.
 
 **Prerequisites:** macOS · the **Edits** desktop app, open, with Automation enabled (the only supported editor; unofficial integration) · [Claude Code](https://claude.com/claude-code) CLI, logged in · `ffmpeg`/`ffprobe` on PATH · Node ≥ 22.18 · optional: **Screen Recording** permission for your terminal (for real screenshots of the Edits app).
 
 <div align="center">
 <img src="docs/assets/dashboard.png" alt="Instaedits dashboard: creative direction summary and live step-by-step progress with model, tokens, cost and time per step" width="560">
-<br><sub>The dashboard: every step, which model ran it, tokens, cost and time. Any step can be re-run from there without re-paying for earlier ones.</sub>
+<br><sub>The dashboard: create a reel on the left, your reels as a grid of real thumbnails on the right; each reel opens its own page with the video, checks and step timeline. Any step can be re-run without re-paying for earlier ones.</sub>
 </div>
 
 ## No script? Hindi video? No problem
@@ -73,9 +73,15 @@ Prefer your own screenshot? `npm run screens -- edits-automation ~/Desktop/autom
 
 GitHub repos are shown as the **actual repo page** (a fresh screenshot of `github.com/owner/name`), not a stats card.
 
+## Optional: face-tracked effects on you
+
+`npm run effects:install` adds [claude-video-effects](https://github.com/Vibha-Ramprakash/claude-video-effects) (MIT, by Vibha Ramprakash): a word dropping in **behind your head**, a spotlight, a tape label on your chest, an Instagram comment typing itself, a Follow button tap, a checklist under your chin and more. The director then uses 1–4 of them as pattern interrupts in full-frame speaker stretches, on the spoken word, never under a card — with the comment box / Follow tap at the call to action. Only short slices around each effect are rendered (in parallel with Edits and the graphics) and swapped in inside the effect windows; everywhere else your original pixels stay untouched. Without the install, nothing changes.
+
 ## What you get
 
-Whenever a card shows, the frame **splits**: the card fills the top half, you stay visible in the bottom half (animated open/close, one accent seam). Between cards you're full-frame, with occasional punch-ins.
+Whenever a card shows, the frame **splits**: the card fills the top half, you stay visible in the bottom half (animated open/close, a thin ink seam). For one or two big moments per video — a multi-step diagram, the payoff number, a real screen worth reading, the call to action — a card goes **full screen** (your voice continues, captions turn to ink on paper). Between cards you're full-frame, with occasional punch-ins.
+
+**The look is editorial, not "AI":** warm paper, ink, and one burnt-orange accent — no gradient backgrounds, no glows, no neon (a test enforces it). And **nothing is text-only**: icons draw themselves on, a highlighter sweeps the key word, checklists tick, numbers fill a ring, data packets travel through diagrams, and on real screenshots a cursor glides to the thing being talked about and clicks.
 
 
 | Card | Use it for |
@@ -94,7 +100,7 @@ Whenever a card shows, the frame **splits**: the card fills the top half, you st
 
 ![The card library: Flow, Code, Steps, Chart, Hook](docs/assets/cards.png)
 
-Plus: **punch-in zooms**, **Hinglish captions** in 2–3-word lines (on the seam while a card shows, so your face stays clear), **ducked licensed music**, **SFX on card entries**, **voice loudness at −14 LUFS**, **dead-air removal** (pauses > 0.4 s) and a **1080×1920, 20 Mbit/s export**. No colour grade, no colour conversion: your footage never passes through the browser renderer, and QA fails any export whose colour drifts more than 2.5 levels from your original.
+Plus: **punch-in zooms**, **Hinglish captions** in 2–3-word lines (on the seam while a card shows, so your face stays clear), **ducked licensed music**, **SFX on card entries**, **voice loudness at −14 LUFS**, **dead-air removal** (pauses > 0.4 s) and an export at **your camera's own resolution** (1440×2560 from a 1440-wide phone clip — never downscaled; graphics are rendered at that resolution too), visually lossless (x264 CRF 12, AAC 320k). No colour grade, no colour conversion: your footage never passes through the browser renderer, and QA fails any export whose colour drifts more than 2.5 levels from your original.
 
 ## How it works
 
@@ -113,15 +119,17 @@ flowchart LR
 | # | Step | Runs on | LLM? |
 |---|---|---|---|
 | 1 | Probe the video | ffprobe | — |
-| 2 | Word-level transcript | Edits app (captions model) | — |
-| 3 | Cut dead air → `tight.mp4` | ffmpeg | — |
-| 4 | **Translate to English** (non-English speech only), with the glossary | Claude Sonnet | ✅ |
-| 5 | **Understand the video + creative direction** (also captures the Edits screenshots) | Claude Opus | ✅ |
-| 6 | **Fetch real visuals** for named tools / repos (verified, see above) | GitHub API + headless Chrome | — |
+| 2 | Word-level transcript — **cached per video** (same clip is never uploaded twice) | Edits app (captions model) | — |
+| 3 | Cut dead air → `tight.mp4` — cached | ffmpeg | — |
+| 4 | **Translate to English** (non-English speech only), with the glossary — cached by prompt | Claude Sonnet | ✅ |
+| 5 | **Director, two passes:** (1) a *script breakdown* — topic, promise, open loop, three candidate hooks, a role for every sentence, a second-by-second plan for the first 5 s, attention risks; (2) the *shot list* built from it — cached by prompt | Claude Opus | ✅ |
+| 6 | **Fetch real visuals** for named tools / repos (verified, see above) — page screenshots reused for a day | GitHub API + headless Chrome | — |
 | 7 | Guardrails, then anchors → exact timestamps (the EDL) | local | — |
-| 8 | **Edits**: captions (its speech model → ≤3-word lines → Hinglish), licensed music, SFX, voice enhance — exact tool calls. Used for the **audio mix and caption text/timing only** | Edits app (+ Claude Sonnet for Hinglish) | ✅ (captions only) |
-| 9 | **Render**: Remotion renders graphics + captions on transparency; ffmpeg places your **original camera pixels** underneath (moved/zoomed, never colour-converted) with the Edits audio at −14 LUFS | Remotion + ffmpeg | — |
-| 10 | **QA**: export vs render (length, colour, every card); Full mode: a model reviews a contact sheet | ffmpeg (+ Claude Sonnet) | ✅ (Full only) |
+| 8 | **Captions** straight from the transcript (exact word times) → ≤3-word Latin-script Hinglish lines — cached | Claude Sonnet | ✅ |
+| 9a ‖ | **Edits**: licensed music, SFX, voice enhance → the audio mix — exact tool calls, cached | Edits app | — |
+| 9b ‖ | **Graphics + captions** rendered on transparency — cached, runs **in parallel** with 9a | Remotion | — |
+| 10 | **Composite** your **original camera pixels** under the graphics (moved/zoomed, never colour-converted), Edits audio at −14 LUFS — cached | ffmpeg | — |
+| 11 | **QA** (checks run in parallel): colour vs your original, first frame = hook, every card at its time, length; Full mode: a model reviews a contact sheet | ffmpeg (+ Claude Sonnet) | ✅ (Full only) |
 
 The director names the sentence *and the spoken word* for each card; the resolver finds that word in the real transcript, so cards land as the thing is said, not on a guessed timestamp. Deep dive: [docs/architecture.md](docs/architecture.md).
 
@@ -156,13 +164,22 @@ zooms: 12.4s +1.2s → 110%,  20.7s +1.2s → 112%        (only where no card is
 Edits adds captions, music and SFX with plain tool calls; Remotion renders the graphics and captions on that exact timeline over your original footage. Nothing re-times it.
 </details>
 
+## Fast re-runs: nothing is computed twice
+
+Every step's output is stored in a **content-addressed cache** (`cache/`, gitignored), keyed by a hash of everything that shapes it: the video's bytes, the cuts, the exact prompt, the card props, the Remotion sources, the music/SFX list. Re-run the same video (a new job or "Re-run from here") and unchanged steps return instantly — no upload, no tokens, no render. Change one thing and only the steps downstream of it recompute. Big renders are pruned least-recently-used beyond `INSTAEDITS_CACHE_MAX_GB` (default 8); `INSTAEDITS_CACHE=off` forces a full recompute.
+
+**Want a different version instead?** Choose **Previous work → Start fresh** (or press **New take** on a finished reel). Nothing is reused: the video is re-transcribed, the screenshots and pages are re-captured, and the director — at higher effort — is shown this video's earlier takes and must pick a different angle, a new hook and different cards. Captions, the Edits audio mix, the graphics and a higher-quality final encode (CRF 12, `slow`) are all regenerated. The new results are cached too, so re-running *that* take is instant.
+
 ## Editing rules (enforced in code where possible)
 
 The prompt carries the creative doctrine ([`server/prompts.mjs`](server/prompts.mjs)); [`server/guardrails.mjs`](server/guardrails.mjs) and the resolver enforce what can be enforced and log every correction (🛡) in the dashboard.
 
 | Rule | How it's enforced |
 |---|---|
-| Hook works with sound off | **Code + tests:** opening Hook trimmed to ≤ 4 words, placed at 0.1 s |
+| The hook is the strongest frame | **Code + tests:** the opening Hook owns **frame 0** (split already open, words already visible — it is the thumbnail), ≤ 4 words, key word on an accent block, optional real-screenshot backdrop; QA checks frame 0. Choosing the strongest line is an **instruction to the director** |
+| Nothing sits still | **Code + tests:** speaker-only stretches get wide→tight framing changes (≤1.6 s apart in the first 6 s, ≤3 s after); every card reveals its content across its whole time on screen and moves with a slow push-in; cards enter/leave mid-motion in one direction |
+| Proof by 4 s | **Instruction to the director**, checked by the resolver (logged when the first proof visual starts after ~4 s) |
+| Text is readable | **Code + tests:** a card stays up ≥ 1 s per 2.5 words on it; captions appear 0.15 s before the word |
 | Don't flood the viewer with sound | **Code + tests:** ≈ 1 SFX per 6 s, ≤ 1 riser, volumes clamped |
 | Voice stays dominant | **Code + tests:** music ≤ 0.16, ducked to ≤ 0.6× |
 | Cards are watchable | **Code + tests:** 1.5–5.5 s each, never overlapping; malformed cards dropped; zooms only in card-free gaps; three-of-a-kind in a row is *flagged*, not fixed |
@@ -173,7 +190,7 @@ The prompt carries the creative doctrine ([`server/prompts.mjs`](server/prompts.
 | One hero colour | **Theme constants + WCAG contrast tests** |
 | Every card adds new information | **Instruction to the director** — reviewed by the Full-mode QA model, not enforced by code |
 
-The reasoning and its sources — including what we *didn't* trust — are in [docs/research.md](docs/research.md).
+The reasoning and its sources — including what we *didn't* trust — are in [docs/research.md](docs/research.md) and, for retention and motion quality (first 3 seconds, pacing, punch-ins, captions, easing), [docs/research-retention.md](docs/research-retention.md).
 
 ## Configuration
 
@@ -208,6 +225,8 @@ Everything environment-specific is in [`server/config.mjs`](server/config.mjs) a
 | Job stuck `running` after a crash | Restart `npm start`: interrupted jobs are marked resumable; use **Re-run from here**. |
 | `rate limit reached — set GITHUB_TOKEN` | A Repo card couldn't be fetched. Add a scope-less `GITHUB_TOKEN` to `.env.local`. |
 | Port already in use | `PORT=4500 npm start` |
+| **Browse…** does nothing / “server is out of date” / the video doesn't play | The dashboard page is newer than the running server. Stop it (Ctrl-C) and run `npm start` again. The picker is the native macOS dialog — it can open behind the browser window. |
+| A re-run did everything again | Re-runs reuse work only when inputs are identical (same video bytes, same options). Check that `INSTAEDITS_CACHE` isn't `off`; `cache/` can be deleted safely. |
 | `edits-editor skipped` / `screen capture failed` | Give your terminal **Screen Recording** permission (System Settings → Privacy & Security), then restart it. Instaedits briefly brings Edits to the front to capture the editor. |
 | `edits-automation skipped` | Open Edits → Settings → Automation once and leave the window open (reused for 7 days), or use your own: `npm run screens -- edits-automation <file.png>`. |
 | `QA failed: colour lost …` / `card … not on screen` | The export doesn't match the render. Check the Edits project it left open, then **Re-run from here** on the Edits step. |
