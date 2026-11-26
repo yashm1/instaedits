@@ -26,15 +26,23 @@ export function trackExpr(values, { variable = 'n', base = 0, digits = 3 } = {})
  * - overlay on a black canvas at y = track.y (the split shift), then the graphics on top
  * - the speaker stays in the camera's own pixel format (full-range BT.709) end to end — no colour matrix is applied to it
  */
-export function filterGraph({ track, duration, fps = 30, origin = { x: 0.5, y: 0.34 }, scale = 1, audioInput = 0 }) {
+export function filterGraph({ track, duration, fps = 30, origin = { x: 0.5, y: 0.34 }, scale = 1, audioInput = 0, fx = [] }) {
   // output at the camera's resolution: the 1080x1920 layout × scale (1440x2560 for a 1440-wide camera) — no downscale
   const even = (n) => Math.round(n / 2) * 2;
   const width = even(1080 * scale), height = even(1920 * scale);
   const z = trackExpr(track.map((t) => t.zoom), { variable: 'on', base: 1, digits: 4 });
   const y = trackExpr(track.map((t) => t.y * scale), { variable: 'n', base: 0, digits: 1 });
+  // effect slices (if any) replace the camera frames ONLY inside their windows. Their renderer writes untagged BT.601
+  // limited range: convert explicitly to the camera's full-range BT.709 so the swap is seamless.
+  const fxChain = fx.flatMap((s, i) => [
+    `[${s.input}:v]colorspace=all=bt709:iall=bt601-6-625:irange=tv:range=pc:format=yuv420p,format=yuvj420p,setpts=PTS+${s.offset.toFixed(3)}/TB[fx${i}]`,
+    `[cam${i}][fx${i}]overlay=0:0:eof_action=pass:enable='${s.windows.map(([a, b]) => `between(t,${a.toFixed(3)},${b.toFixed(3)})`).join('+')}'[cam${i + 1}]`,
+  ]);
   return [
     `color=c=black:s=${width}x${height}:r=${fps}:d=${duration.toFixed(3)},format=yuvj420p[bg]`,
-    `[0:v]fps=${fps},zoompan=z='${z}':x='(iw-iw/zoom)*${origin.x}':y='(ih-ih/zoom)*${origin.y}':d=1:s=${width}x${height}:fps=${fps},format=yuvj420p[spk]`,
+    `[0:v]fps=${fps},format=yuvj420p[cam0]`,
+    ...fxChain,
+    `[cam${fx.length}]zoompan=z='${z}':x='(iw-iw/zoom)*${origin.x}':y='(ih-ih/zoom)*${origin.y}':d=1:s=${width}x${height}:fps=${fps},format=yuvj420p[spk]`,
     `[bg][spk]overlay=x=0:y='${y}':eval=frame:shortest=1:format=auto[base]`,
     `[1:v]format=yuva444p10le[g]`,
     `[base][g]overlay=0:0:shortest=1:format=auto,format=yuvj420p[v]`,
@@ -43,8 +51,8 @@ export function filterGraph({ track, duration, fps = 30, origin = { x: 0.5, y: 0
 }
 
 /** ffmpeg args: encode with the SAME colour description as the camera file (full range, BT.709 everywhere). */
-export function compositeArgs({ tight, overlay, graphFile, out, audio = null, hq = false }) {
-  return ['-y', '-loglevel', 'error', '-i', tight, '-i', overlay, ...(audio ? ['-i', audio] : []), '-filter_complex_script', graphFile, '-map', '[v]', '-map', '[a]',
+export function compositeArgs({ tight, overlay, graphFile, out, audio = null, hq = false, fx = [] }) {
+  return ['-y', '-loglevel', 'error', '-i', tight, '-i', overlay, ...(audio ? ['-i', audio] : []), ...fx.flatMap((p) => ['-i', p]), '-filter_complex_script', graphFile, '-map', '[v]', '-map', '[a]',
     // preset medium: measured 1.7× faster than slow at the same CRF, ~1% larger file
     // CRF 12 (visually lossless at native resolution); hq ("start fresh") CRF 10 + slow
     '-c:v', 'libx264', '-crf', hq ? '10' : '12', '-preset', hq ? 'slow' : 'medium', '-pix_fmt', 'yuvj420p',

@@ -2,6 +2,7 @@
 // Every number here comes from rules several independent editing guides agree on (see docs/research.md).
 import { config } from './config.mjs';
 import { isRefKind, parseRepo } from './references.mjs';
+import { FX_CATALOG, FX_LIMITS } from './effects.mjs';
 
 export const LIMITS = {
   musicMax: 0.16, duckRatio: 0.6,
@@ -33,7 +34,7 @@ export function missingProps(s) {
 const words = (t) => String(t ?? '').trim().split(/\s+/).filter(Boolean);
 
 /** Returns { direction, notes } — a corrected deep copy plus a human-readable list of what was changed/flagged. */
-export function applyGuardrails(input, { totalSeconds, scriptWordCount, screens = {} }) {
+export function applyGuardrails(input, { totalSeconds, scriptWordCount, screens = {}, effectsAvailable = false }) {
   const d = structuredClone(input), notes = [];
   const L = LIMITS;
 
@@ -93,6 +94,20 @@ export function applyGuardrails(input, { totalSeconds, scriptWordCount, screens 
     run = i && d.scenes[i - 1].kind === s.kind ? run + 1 : 1;
     if (run > L.maxSameKindInRow) notes.push(`warning: ${run} ${s.kind} cards in a row at ${s.id}`);
   });
+
+  // face-tracked effects: only when the pack is installed; known names, 1.5-4 s, ≤4, text trimmed to the effect's limit
+  const fx = [];
+  for (const e of d.effects ?? []) {
+    const spec = FX_CATALOG[e?.fx];
+    if (!effectsAvailable) { if (e) notes.push(`effect ${e.fx}: the effects pack is not installed — skipped`); continue; }
+    if (!spec) { notes.push(`effect "${e?.fx}" is not in the catalog — dropped`); continue; }
+    if (fx.length >= FX_LIMITS.max) { notes.push(`effect ${e.fx}: more than ${FX_LIMITS.max} effects — dropped`); continue; }
+    const out = { fx: e.fx, anchor: e.anchor, ...(e.word ? { word: e.word } : {}), dur: clamp(Number(e.dur) || 2.5, FX_LIMITS.durMin, FX_LIMITS.durMax) };
+    if (spec.text && e.text) out.text = String(e.text).slice(0, spec.max);
+    if (e.opts && typeof e.opts === 'object') out.opts = Object.fromEntries(Object.entries(e.opts).filter(([k, v]) => /^[a-z_]{1,12}$/.test(k) && ['string', 'number'].includes(typeof v)).map(([k, v]) => [k, String(v).slice(0, 24)]));
+    fx.push(out);
+  }
+  d.effects = fx;
 
   // zooms
   d.zooms = (d.zooms ?? []).map((z) => ({ ...z, scale: clamp(z.scale, L.zoomMin, L.zoomMax), dur: clamp(z.dur, L.zoomDurMin, L.zoomDurMax) }));

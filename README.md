@@ -73,6 +73,10 @@ Prefer your own screenshot? `npm run screens -- edits-automation ~/Desktop/autom
 
 GitHub repos are shown as the **actual repo page** (a fresh screenshot of `github.com/owner/name`), not a stats card.
 
+## Optional: face-tracked effects on you
+
+`npm run effects:install` adds [claude-video-effects](https://github.com/Vibha-Ramprakash/claude-video-effects) (MIT, by Vibha Ramprakash): a word dropping in **behind your head**, a spotlight, a tape label on your chest, an Instagram comment typing itself, a Follow button tap, a checklist under your chin and more. The director then uses 1–4 of them as pattern interrupts in full-frame speaker stretches, on the spoken word, never under a card — with the comment box / Follow tap at the call to action. Only short slices around each effect are rendered (in parallel with Edits and the graphics) and swapped in inside the effect windows; everywhere else your original pixels stay untouched. Without the install, nothing changes.
+
 ## What you get
 
 Whenever a card shows, the frame **splits**: the card fills the top half, you stay visible in the bottom half (animated open/close, a thin ink seam). For one or two big moments per video — a multi-step diagram, the payoff number, a real screen worth reading, the call to action — a card goes **full screen** (your voice continues, captions turn to ink on paper). Between cards you're full-frame, with occasional punch-ins.

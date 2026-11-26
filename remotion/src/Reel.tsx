@@ -20,6 +20,8 @@ export type ReelProps = {
   overlayOnly?: boolean;
   /** Caption lines (text + timing from the Edits app, Latin-script Hinglish). y = normalised centre (seam during a card). */
   captions?: CaptionLine[];
+  /** face-tracked effect windows on the speaker; 'low' ones draw UI at chest height, so captions move above the head */
+  effects?: {start: number; end: number; zone: 'low' | 'high'}[];
 };
 export type CaptionLine = {start: number; end: number; y: number; words: {text: string; start: number; end: number}[]};
 
@@ -33,7 +35,7 @@ class Guard extends React.Component<{children: React.ReactNode}, {bad: boolean}>
   render() { return this.state.bad ? <AbsoluteFill style={{background: theme.bg}} /> : this.props.children; }
 }
 
-export const Reel: React.FC<ReelProps> = ({video, scenes, zooms, overlayOnly, captions = []}) => {
+export const Reel: React.FC<ReelProps> = ({video, scenes, zooms, overlayOnly, captions = [], effects = []}) => {
   const f = useCurrentFrame();
   const {fps} = useVideoConfig();
 
@@ -69,7 +71,7 @@ export const Reel: React.FC<ReelProps> = ({video, scenes, zooms, overlayOnly, ca
       </div>
       {/* seam: a thin ink line (hidden when a full-screen card covers the frame) */}
       {split > 0.01 && seam < FULL_H - 4 ? <div style={{position: 'absolute', left: 0, right: 0, top: seam - 2, height: 4, background: theme.text, opacity: split}} /> : null}
-      <Captions lines={captions} t={f / fps} split={split} panelH={panelH} />
+      <Captions lines={captions} t={f / fps} split={split} panelH={panelH} lift={effects.some((e) => e.zone === 'low' && f / fps >= e.start - 0.1 && f / fps < e.end + 0.1)} />
     </AbsoluteFill>
   );
 };
@@ -98,13 +100,14 @@ const CAPTION_PINK = theme.accent; // the one accent, also behind the spoken wor
 // so a line that outlives its card never ends up over the face.
 const CAPTION_Y_FULL = 0.72, CAPTION_Y_ON_CARD = 0.745; // on a full card: below its content zone (ends ~1300 px), above the IG bottom UI
 const LEAD = 0.15; // captions appear 0.1-0.3 s BEFORE the audio (research): the eye arrives as the word is heard
-const Captions: React.FC<{lines: CaptionLine[]; t: number; split: number; panelH: number}> = ({lines, t: now, split, panelH}) => {
+const CAPTION_Y_LIFTED = 0.215; // above the head, just below Instagram's top bar — while a chest-height effect shows
+const Captions: React.FC<{lines: CaptionLine[]; t: number; split: number; panelH: number; lift?: boolean}> = ({lines, t: now, split, panelH, lift}) => {
   const t = now + LEAD;
   const line = lines.find((l) => t >= l.start && t < l.end);
   if (!line) return null;
   // speaker full-frame → lower-middle; split → on the seam; full-screen card → low on the card, as INK on paper
   const target = Math.min(panelH, CAPTION_Y_ON_CARD * 1920);
-  const y = CAPTION_Y_FULL * 1920 + (target - CAPTION_Y_FULL * 1920) * split;
+  const y = lift && split < 0.01 ? CAPTION_Y_LIFTED * 1920 : CAPTION_Y_FULL * 1920 + (target - CAPTION_Y_FULL * 1920) * split;
   const onPaper = panelH * split > 1300;
   return (
     <div style={{position: 'absolute', left: 60, right: 60, top: y, transform: 'translateY(-50%)', display: 'flex', justifyContent: 'center', flexWrap: 'wrap', gap: '6px 14px', fontFamily: captionFont, fontWeight: 800, fontSize: 68, lineHeight: 1.12, color: onPaper ? theme.text : '#fff', textShadow: onPaper ? 'none' : '0 3px 12px rgba(0,0,0,0.55)'}}>
